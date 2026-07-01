@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Global Roles for Super Admin capabilities
+enum GlobalRole {
+  SUPER_ADMIN
+  USER
+}
+
+// Tenant Roles for RBAC within an organization
+enum TenantRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// ------------------------------------------------------------------
+// SAAS MULTI-TENANCY MODELS
+// ------------------------------------------------------------------
+
+model Tenant {
+  id              String   @id @default(uuid())
+  name            String
+  subdomain       String   @unique
+  
+  members         TenantMember[]
+  subscription    TenantSubscription?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TenantMember {
+  id              String   @id @default(uuid())
+  
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  userId          String   // Maps to Keycloak User ID or UserProfile
+  role            TenantRole @default(MEMBER)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, userId]) // A user can only have one membership per tenant
+}
+
+model TenantSubscription {
+  id              String   @id @default(uuid())
+  
+  tenantId        String   @unique
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  planType        String   // "TRIAL", "BASIC", "PROFESSIONAL", "ENTERPRISE"
+  status          String   // "ACTIVE", "EXPIRED", "CANCELLED", "PENDING_PAYMENT"
+  
+  startDate       DateTime
+  endDate         DateTime
+  
+  paymentMethod   String?  // "RAZORPAY_SUB", "MANUAL", etc.
+  paymentId       String?  // e.g. Razorpay payment ID / Subscription ID
+  amount          Float?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model UserProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique // Maps to Keycloak User ID
+  
+  phoneNumber     String?
+  companyName     String?
+  
+  globalRole      GlobalRole @default(USER) // For Super Admin
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ------------------------------------------------------------------
+// UNIFIED PAN-INDIA TENDER MODEL
+// ------------------------------------------------------------------
+
+model Tender {
+  id              String   @id @default(uuid())
+  localId         Int      @default(autoincrement())
+
+  // Geographic Metadata
+  state           String?
+  district        String?
+  city            String?
+  level           String?  // e.g., "CENTRAL", "STATE", "DISTRICT"
+  organisation    String?
+
+  // Tender Details
+  title           String
+  description     String?
+
+  startDate       DateTime?
+  endDate         DateTime?
+
+  noticePdfUrl    String?
+  tenderPdfUrl    String?
+
+  tenderValue     String?
+  emd             String?
+  applicationCost String?
+
+  aiSummary       String?
+  tags            String[] @default([])
+
+  aiProcessed     Boolean  @default(false)
+  aiError         String?
+
+  sourceUrl       String   @unique // Highly recommended to ensure unique scraping
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([state, district])
+  @@index([endDate])
+}
+
+// ------------------------------------------------------------------
+// TENANT-ISOLATED TENDER INTERACTIONS
+// ------------------------------------------------------------------
+
+model TenantTenderAction {
+  id              String   @id @default(uuid())
+  
+  tenantId        String
+  tenderId        String   // References global Tender
+  
+  isBookmarked    Boolean  @default(false)
+  isApplied       Boolean  @default(false)
+  notes           String?
+  
+  updatedByUserId String?  // Which user in the tenant made the action
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, tenderId])
+}
+
+// ------------------------------------------------------------------
+// SYSTEM & SCRAPING LOGS
+// ------------------------------------------------------------------
+
+model ScrapeLog {
+  id            String   @id @default(uuid())
+  
+  targetRegion  String   // e.g., "Odisha", "Maharashtra"
+  status        String
+  tendersFound  Int
+  error         String?
+  source        String   @default("AUTO")
+  
+  createdAt     DateTime @default(now())
+}
+
+model PriorityKeyword {
+  id        String   @id @default(uuid())
+  word      String   @unique
+  createdAt DateTime @default(now())
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model EmailRecipient {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  createdAt DateTime @default(now())
+}

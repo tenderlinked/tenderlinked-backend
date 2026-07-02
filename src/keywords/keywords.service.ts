@@ -30,9 +30,18 @@ export class KeywordsService {
       throw new BadRequestException("Valid word is required");
     }
     try {
-      return await this.prisma.priorityKeyword.create({
+      const keyword = await this.prisma.priorityKeyword.create({
         data: { word: word.trim() },
       });
+      
+      // Automatically generate AI expansions for new priority keywords
+      try {
+        await this.generateAndSaveExpansion(word.trim());
+      } catch (aiError) {
+        console.error("Failed to auto-expand keyword:", aiError);
+      }
+      
+      return keyword;
     } catch (error: any) {
       if (error.code === "P2002") {
         throw new BadRequestException("Keyword already exists");

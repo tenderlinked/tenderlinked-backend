@@ -72,6 +72,14 @@ export class KeywordsController {
     return { success: true, data };
   }
 
+  @Post('expansions/generate-and-save')
+  @ApiOperation({ summary: "Generate expansions via AI and save immediately" })
+  @ApiBody({ schema: { properties: { baseWord: { type: "string" } } } })
+  async generateAndSaveExpansion(@Body() body: { baseWord: string }) {
+    const data = await this.keywordsService.generateAndSaveExpansion(body.baseWord);
+    return { success: true, data };
+  }
+
   @Post('expansions/:id/ai-suggest')
   @ApiOperation({ summary: "Auto-expand a keyword using AI" })
   async autoExpand(@Param('id') id: string) {

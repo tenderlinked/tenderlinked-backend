@@ -71,7 +71,25 @@ export class KeywordsService {
   async autoExpandKeyword(id: string) {
     const keywordRecord = await this.prisma.keywordExpansion.findUnique({ where: { id } });
     if (!keywordRecord) throw new NotFoundException("Keyword not found");
+    
+    return this.generateExpansionsFromAI(keywordRecord.baseWord);
+  }
 
+  async generateAndSaveExpansion(baseWord: string) {
+    if (!baseWord) throw new BadRequestException("baseWord is required");
+    
+    // Call AI to get expansions
+    const expansions = await this.generateExpansionsFromAI(baseWord);
+    
+    // Save directly to the database as APPROVED
+    return this.prisma.keywordExpansion.upsert({
+      where: { baseWord },
+      update: { expansions, status: 'APPROVED' },
+      create: { baseWord, expansions, status: 'APPROVED' }
+    });
+  }
+
+  private async generateExpansionsFromAI(baseWord: string): Promise<string[]> {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) throw new BadRequestException("Gemini API key is not configured.");
 
@@ -81,7 +99,7 @@ export class KeywordsService {
 Expand the following ambiguous acronym or keyword into a list of its most likely unambiguous full industry terms.
 Return ONLY a valid JSON array of strings, nothing else.
 For example, if the input is "IT", return ["Information Technology", "Software", "IT Consulting"].
-Keyword: "${keywordRecord.baseWord}"`;
+Keyword: "${baseWord}"`;
 
     try {
       const response = await ai.models.generateContent({
@@ -93,12 +111,10 @@ Keyword: "${keywordRecord.baseWord}"`;
         throw new Error("Empty response from AI");
       }
 
-      // parse the JSON response
       const jsonText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const expansions = JSON.parse(jsonText);
-
-      return expansions;
+      return JSON.parse(jsonText);
     } catch (error) {
+      console.error("AI Expansion Error:", error);
       throw new BadRequestException("Failed to generate AI expansions");
     }
   }

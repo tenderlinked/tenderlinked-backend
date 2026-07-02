@@ -125,10 +125,10 @@ export class TenantsService {
         tenantId,
         planType,
         status,
-        provider: 'MANUAL',
-        providerSubId: 'MANUAL_' + Date.now(),
-        currentPeriodStart: new Date(),
-        currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 10)) // Arbitrary far future for manual
+        paymentMethod: 'MANUAL',
+        paymentId: 'MANUAL_' + Date.now(),
+        startDate: new Date(),
+        endDate: new Date(new Date().setFullYear(new Date().getFullYear() + 10)) // Arbitrary far future for manual
       }
     });
   }

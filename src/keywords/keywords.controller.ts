@@ -95,6 +95,15 @@ export class KeywordsController {
     return { success: true, data: expansions };
   }
 
+  @Post('ai-suggest-new')
+  @ApiOperation({ summary: "Suggest expansions for a new word without saving" })
+  @UseGuards(SuperAdminGuard)
+  @ApiBody({ schema: { properties: { word: { type: "string" } } } })
+  async aiSuggestNew(@Body() body: { word: string }) {
+    const expansions = await this.keywordsService.generateExpansionsFromAI(body.word);
+    return { success: true, data: expansions };
+  }
+
   @Put('expansions/:id/approve')
   @ApiOperation({ summary: "Approve and save expansions" })
   @UseGuards(SuperAdminGuard)

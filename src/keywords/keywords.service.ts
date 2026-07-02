@@ -33,14 +33,6 @@ export class KeywordsService {
       const keyword = await this.prisma.priorityKeyword.create({
         data: { word: word.trim() },
       });
-      
-      // Automatically generate AI expansions for new priority keywords
-      try {
-        await this.generateAndSaveExpansion(word.trim());
-      } catch (aiError) {
-        console.error("Failed to auto-expand keyword:", aiError);
-      }
-      
       return keyword;
     } catch (error: any) {
       if (error.code === "P2002") {
@@ -120,7 +112,7 @@ export class KeywordsService {
     });
   }
 
-  private async generateExpansionsFromAI(baseWord: string): Promise<string[]> {
+  async generateExpansionsFromAI(baseWord: string): Promise<string[]> {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) throw new BadRequestException("Gemini API key is not configured.");
 

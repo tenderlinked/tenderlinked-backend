@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createProfile(userId: string, phoneNumber?: string, companyName?: string) {
+  async createProfile(userId: string, phoneNumber?: string, companyName?: string, username?: string) {
     try {
       // 1. Create the User Profile
       const profile = await this.prisma.userProfile.create({
@@ -19,11 +19,15 @@ export class UsersService {
 
       // 2. Create a default Tenant for the user based on their company name or ID
       const tenantName = companyName || `Workspace_${userId.substring(0, 5)}`;
-      // Generate a 6-character random alphanumeric subdomain
-      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-      let uniqueSubdomain = '';
-      for (let i = 0; i < 6; i++) {
-          uniqueSubdomain += chars.charAt(Math.floor(Math.random() * chars.length));
+      
+      let uniqueSubdomain = username;
+      if (!uniqueSubdomain) {
+        // Generate a 6-character random alphanumeric subdomain fallback
+        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        uniqueSubdomain = '';
+        for (let i = 0; i < 6; i++) {
+            uniqueSubdomain += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
       }
 
       const tenant = await this.prisma.tenant.create({

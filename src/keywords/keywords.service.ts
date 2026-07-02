@@ -7,7 +7,22 @@ export class KeywordsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll() {
-    return this.prisma.priorityKeyword.findMany({ orderBy: { createdAt: "asc" } });
+    const keywords = await this.prisma.priorityKeyword.findMany({ orderBy: { createdAt: "asc" } });
+    
+    // Fetch associated approved expansions
+    const expansions = await this.prisma.keywordExpansion.findMany({
+      where: {
+        baseWord: { in: keywords.map(k => k.word) },
+        status: 'APPROVED'
+      }
+    });
+    
+    const expMap = new Map(expansions.map(e => [e.baseWord.toLowerCase(), e.expansions]));
+    
+    return keywords.map(k => ({
+      ...k,
+      expansions: expMap.get(k.word.toLowerCase()) || []
+    }));
   }
 
   async create(word: string) {

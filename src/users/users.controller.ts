@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 
@@ -15,8 +15,8 @@ export class UsersController {
   }
 
   @Get('profile/:userId')
-  async getProfile(@Param('userId') userId: string) {
-    return this.usersService.getProfile(userId);
+  async getProfile(@Param('userId') userId: string, @Query('email') email?: string) {
+    return this.usersService.getProfile(userId, email);
   }
 
   @Get('profile/check-phone/:phone')

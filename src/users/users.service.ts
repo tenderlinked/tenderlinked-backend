@@ -55,10 +55,19 @@ export class UsersService {
     }
   }
 
-  async getProfile(userId: string) {
+  async getProfile(userId: string, email?: string) {
     let profile = await this.prisma.userProfile.findUnique({
       where: { userId },
     });
+    
+    // Sync email from Keycloak if missing or outdated
+    if (profile && email && (profile as any).email !== email) {
+      // @ts-ignore
+      profile = await this.prisma.userProfile.update({
+        where: { userId },
+        data: { email }
+      });
+    }
     
     let member = await this.prisma.tenantMember.findFirst({
       where: { userId },

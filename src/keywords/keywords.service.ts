@@ -35,6 +35,15 @@ export class KeywordsService {
 
   // ---- Expansion Dictionary Management ----
 
+  async createExpansion(baseWord: string, expansions: string[] = [], status: string = 'PENDING') {
+    if (!baseWord) throw new BadRequestException("baseWord is required");
+    return this.prisma.keywordExpansion.upsert({
+      where: { baseWord },
+      update: { expansions, status },
+      create: { baseWord, expansions, status }
+    });
+  }
+
   async getPendingExpansions() {
     return this.prisma.keywordExpansion.findMany({
       where: { status: 'PENDING' },

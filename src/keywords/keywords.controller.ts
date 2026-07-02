@@ -57,6 +57,14 @@ export class KeywordsController {
 
   // ---- Expansion Endpoints ----
 
+  @Post('expansions')
+  @ApiOperation({ summary: "Manually add a keyword to the expansion dictionary" })
+  @ApiBody({ schema: { properties: { baseWord: { type: "string" }, expansions: { type: "array", items: { type: "string" } }, status: { type: "string" } } } })
+  async createExpansion(@Body() body: { baseWord: string, expansions?: string[], status?: string }) {
+    const data = await this.keywordsService.createExpansion(body.baseWord, body.expansions, body.status);
+    return { success: true, data };
+  }
+
   @Get('expansions/pending')
   @ApiOperation({ summary: "Get pending keyword expansions" })
   async getPendingExpansions() {

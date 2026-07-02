@@ -2,6 +2,7 @@ import { Controller, Get, Post, Delete, Param, Body, UseGuards, Req } from '@nes
 import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { TenantsService } from './tenants.service';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
+import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 
 @ApiTags('Tenants')
 @Controller('tenants')
@@ -43,14 +44,14 @@ export class TenantsController {
   // ---- Super Admin Routes (Should use a SuperAdmin guard ideally) ----
   @Get()
   @ApiOperation({ summary: "Get all tenants (Super Admin)" })
-  // @UseGuards(SuperAdminGuard) // TODO
+  @UseGuards(SuperAdminGuard)
   async getAllTenants() {
     return this.tenantsService.getAllTenants();
   }
 
   @Post(':tenantId/subscription')
   @ApiOperation({ summary: "Update tenant subscription (Super Admin)" })
-  // @UseGuards(SuperAdminGuard) // TODO
+  @UseGuards(SuperAdminGuard)
   async updateSubscription(
     @Param('tenantId') tenantId: string, 
     @Body() body: { planType: string; status: string }

@@ -113,6 +113,18 @@ export class TenantsService {
       throw new NotFoundException("Tenant not found");
     }
 
+    // Intercept keywords to populate the KeywordExpansion dictionary for Super Admin review
+    if (data.keywords && data.keywords.length > 0) {
+      for (const kw of data.keywords) {
+        // Upsert so we don't overwrite if it already exists (e.g. APPROVED status)
+        await this.prisma.keywordExpansion.upsert({
+          where: { baseWord: kw },
+          update: {},
+          create: { baseWord: kw, status: 'PENDING' }
+        });
+      }
+    }
+
     return this.prisma.tenantAlertPreference.upsert({
       where: { tenantId: tenant.id },
       update: {

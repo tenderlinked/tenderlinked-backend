@@ -188,6 +188,16 @@ model PriorityKeyword {
   createdAt DateTime @default(now())
 }
 
+model KeywordExpansion {
+  id          String   @id @default(uuid())
+  baseWord    String   @unique
+  expansions  String[] @default([])
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model SystemSetting {
   key       String   @id
   value     String

@@ -134,16 +134,24 @@ export class TenantsService {
   }
 
   async deleteTenant(tenantId: string) {
-    // Delete associated records first (cascade should ideally handle this if set in schema, 
-    // but Prisma sometimes requires explicit deletes or onUpdate Cascade setup)
+    // Delete associated records first
     await this.prisma.tenantMember.deleteMany({ where: { tenantId } });
     await this.prisma.tenantSubscription.deleteMany({ where: { tenantId } });
     await this.prisma.tenantAlertPreference.deleteMany({ where: { tenantId } });
-    // Assuming there might be tenders associated with the tenant in a real app,
-    // they would be deleted here too if they are tenant-specific.
     
     return this.prisma.tenant.delete({
       where: { id: tenantId }
+    });
+  }
+
+  async bulkDeleteTenants(tenantIds: string[]) {
+    // Delete associated records first
+    await this.prisma.tenantMember.deleteMany({ where: { tenantId: { in: tenantIds } } });
+    await this.prisma.tenantSubscription.deleteMany({ where: { tenantId: { in: tenantIds } } });
+    await this.prisma.tenantAlertPreference.deleteMany({ where: { tenantId: { in: tenantIds } } });
+    
+    return this.prisma.tenant.deleteMany({
+      where: { id: { in: tenantIds } }
     });
   }
 

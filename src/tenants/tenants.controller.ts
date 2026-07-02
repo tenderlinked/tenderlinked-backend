@@ -73,7 +73,7 @@ export class TenantsController {
     return this.tenantsService.removeMember(tenantId, userId);
   }
 
-  @Delete('bulk')
+  @Post('bulk-delete')
   @ApiOperation({ summary: "Permanently delete multiple tenant workspaces (Super Admin)" })
   @UseGuards(SuperAdminGuard)
   @ApiBody({ schema: { properties: { ids: { type: "array", items: { type: "string" } } } } })

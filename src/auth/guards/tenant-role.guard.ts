@@ -8,6 +8,35 @@ export class TenantRoleGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     
+    // --- Super Admin Impersonation Bypass ---
+    // If the requester is a Super Admin, we let them pass immediately.
+    const authHeader = request.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        
+        const email = decodedPayload.email;
+        const sub = decodedPayload.sub;
+        
+        const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS || 'admin@enfycon.com,sahadebbarman@gmail.com,deb@enfycon.com').split(',').map(e => e.trim().toLowerCase());
+        const roles = decodedPayload?.realm_access?.roles || [];
+        
+        if ((email && superAdminEmails.includes(email.toLowerCase())) || roles.includes('SUPER_ADMIN') || roles.includes('super_admin')) {
+          return true;
+        }
+
+        if (sub) {
+          const userProfile = await this.prisma.userProfile.findUnique({ where: { userId: sub } });
+          if (userProfile?.globalRole === 'SUPER_ADMIN') return true;
+        }
+      } catch (e) {
+        // Ignore and fallback to standard tenant check
+      }
+    }
+    // -----------------------------------------
+
     // In Phase 3, the user context will be populated by Keycloak/Auth middleware
     // For now, we expect userId and tenantId to be passed in the body or headers
     const userId = request.body?.userId || request.headers['x-user-id'];

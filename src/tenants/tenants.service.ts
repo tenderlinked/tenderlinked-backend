@@ -97,9 +97,32 @@ export class TenantsService {
   }
 
   async updateTenantSubscription(tenantId: string, planType: string, status: string) {
-    return this.prisma.tenantSubscription.update({
+    return this.prisma.tenantSubscription.upsert({
       where: { tenantId },
-      data: { planType, status }
+      update: { planType, status },
+      create: {
+        tenantId,
+        planType,
+        status,
+        provider: 'MANUAL',
+        providerSubId: 'MANUAL_' + Date.now(),
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: new Date(new Date().setFullYear(new Date().getFullYear() + 10)) // Arbitrary far future for manual
+      }
+    });
+  }
+
+  async deleteTenant(tenantId: string) {
+    // Delete associated records first (cascade should ideally handle this if set in schema, 
+    // but Prisma sometimes requires explicit deletes or onUpdate Cascade setup)
+    await this.prisma.tenantMember.deleteMany({ where: { tenantId } });
+    await this.prisma.tenantSubscription.deleteMany({ where: { tenantId } });
+    await this.prisma.tenantAlertPreference.deleteMany({ where: { tenantId } });
+    // Assuming there might be tenders associated with the tenant in a real app,
+    // they would be deleted here too if they are tenant-specific.
+    
+    return this.prisma.tenant.delete({
+      where: { id: tenantId }
     });
   }
 

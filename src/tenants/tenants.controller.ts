@@ -58,4 +58,25 @@ export class TenantsController {
   ) {
     return this.tenantsService.updateTenantSubscription(tenantId, body.planType, body.status);
   }
+
+  @Get(':tenantId/admin/members')
+  @ApiOperation({ summary: "Get all members of a tenant workspace (Super Admin)" })
+  @UseGuards(SuperAdminGuard)
+  async getMembersAdmin(@Param('tenantId') tenantId: string) {
+    return this.tenantsService.getTenantMembers(tenantId);
+  }
+
+  @Delete(':tenantId/admin/members/:userId')
+  @ApiOperation({ summary: "Force remove a member from a tenant (Super Admin)" })
+  @UseGuards(SuperAdminGuard)
+  async removeMemberAdmin(@Param('tenantId') tenantId: string, @Param('userId') userId: string) {
+    return this.tenantsService.removeMember(tenantId, userId);
+  }
+
+  @Delete(':tenantId')
+  @ApiOperation({ summary: "Permanently delete a tenant workspace and all its data (Super Admin)" })
+  @UseGuards(SuperAdminGuard)
+  async deleteTenant(@Param('tenantId') tenantId: string) {
+    return this.tenantsService.deleteTenant(tenantId);
+  }
 }

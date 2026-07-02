@@ -78,14 +78,21 @@ export class KeywordsService {
   async generateAndSaveExpansion(baseWord: string) {
     if (!baseWord) throw new BadRequestException("baseWord is required");
     
-    // Call AI to get expansions
-    const expansions = await this.generateExpansionsFromAI(baseWord);
+    // Fetch existing expansions to avoid losing them
+    const existing = await this.prisma.keywordExpansion.findUnique({ where: { baseWord } });
+    const oldExpansions = existing?.expansions || [];
+
+    // Call AI to get new expansions
+    const newExpansions = await this.generateExpansionsFromAI(baseWord);
+    
+    // Merge arrays and remove duplicates
+    const mergedExpansions = Array.from(new Set([...oldExpansions, ...newExpansions]));
     
     // Save directly to the database as APPROVED
     return this.prisma.keywordExpansion.upsert({
       where: { baseWord },
-      update: { expansions, status: 'APPROVED' },
-      create: { baseWord, expansions, status: 'APPROVED' }
+      update: { expansions: mergedExpansions, status: 'APPROVED' },
+      create: { baseWord, expansions: mergedExpansions, status: 'APPROVED' }
     });
   }
 

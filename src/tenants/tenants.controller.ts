@@ -25,6 +25,15 @@ export class TenantsController {
     return this.tenantsService.updateSubdomain(tenantId, body.subdomain);
   }
 
+  @Post('by-subdomain/:subdomain/alert-preferences')
+  // Public endpoint for the onboarding step right after registration
+  async saveAlertPreferences(
+    @Param('subdomain') subdomain: string, 
+    @Body() body: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }
+  ) {
+    return this.tenantsService.saveAlertPreferencesBySubdomain(subdomain, body);
+  }
+
   // ---- Super Admin Routes (Should use a SuperAdmin guard ideally) ----
   @Get()
   // @UseGuards(SuperAdminGuard) // TODO

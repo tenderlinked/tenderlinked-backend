@@ -102,4 +102,32 @@ export class TenantsService {
       data: { planType, status }
     });
   }
+
+  // ---- Alert Preferences ----
+  async saveAlertPreferencesBySubdomain(subdomain: string, data: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { subdomain }
+    });
+
+    if (!tenant) {
+      throw new NotFoundException("Tenant not found");
+    }
+
+    return this.prisma.tenantAlertPreference.upsert({
+      where: { tenantId: tenant.id },
+      update: {
+        keywords: data.keywords,
+        preferredStates: data.preferredStates,
+        tenderValueRange: data.tenderValueRange,
+        companyWebsite: data.companyWebsite,
+      },
+      create: {
+        tenantId: tenant.id,
+        keywords: data.keywords,
+        preferredStates: data.preferredStates,
+        tenderValueRange: data.tenderValueRange,
+        companyWebsite: data.companyWebsite,
+      }
+    });
+  }
 }

@@ -9,9 +9,9 @@ export class UsersController {
 
   @Post('profile')
   async createProfile(
-    @Body() body: { userId: string; phoneNumber?: string; companyName?: string; username?: string },
+    @Body() body: { userId: string; email?: string; phoneNumber?: string; companyName?: string; username?: string },
   ) {
-    return this.usersService.createProfile(body.userId, body.phoneNumber, body.companyName, body.username);
+    return this.usersService.createProfile(body.userId, body.email, body.phoneNumber, body.companyName, body.username);
   }
 
   @Get('profile/:userId')

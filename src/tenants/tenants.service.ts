@@ -85,14 +85,35 @@ export class TenantsService {
   // ---- Super Admin Actions ----
 
   async getAllTenants() {
-    return this.prisma.tenant.findMany({
+    const tenants = await this.prisma.tenant.findMany({
       include: {
         subscription: true,
         _count: {
           select: { members: true }
+        },
+        members: {
+          where: { role: 'OWNER' },
+          take: 1
         }
       },
       orderBy: { createdAt: 'desc' }
+    });
+
+    const ownerUserIds = tenants.map(t => t.members[0]?.userId).filter(Boolean);
+    const profiles = await this.prisma.userProfile.findMany({
+      where: { userId: { in: ownerUserIds } }
+    });
+    const profileMap = new Map(profiles.map(p => [p.userId, p]));
+
+    return tenants.map(t => {
+      const ownerId = t.members[0]?.userId;
+      const profile = ownerId ? profileMap.get(ownerId) : null;
+      // Exclude members from final payload to keep it clean
+      const { members, ...tenantData } = t;
+      return {
+        ...tenantData,
+        ownerEmail: (profile as any)?.email || null
+      };
     });
   }
 

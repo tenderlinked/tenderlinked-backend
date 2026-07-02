@@ -91,6 +91,7 @@ model UserProfile {
   id              String   @id @default(uuid())
   userId          String   @unique // Maps to Keycloak User ID
   
+  email           String?  @unique
   phoneNumber     String?
   companyName     String?
   

@@ -5,12 +5,14 @@ import { PrismaService } from '../prisma/prisma.service';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createProfile(userId: string, phoneNumber?: string, companyName?: string, username?: string) {
+  async createProfile(userId: string, email?: string, phoneNumber?: string, companyName?: string, username?: string) {
     try {
       // 1. Create the User Profile
+      // @ts-ignore
       const profile = await this.prisma.userProfile.create({
         data: {
           userId,
+          email,
           phoneNumber,
           companyName,
           // Defaults to globalRole: USER

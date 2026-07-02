@@ -134,7 +134,19 @@ export class TenantsService {
   }
 
   async deleteTenant(tenantId: string) {
-    // Delete associated records first
+    // 1. Get all members to delete their users entirely
+    const members = await this.prisma.tenantMember.findMany({ where: { tenantId } });
+    const userIds = members.map(m => m.userId);
+    
+    // 2. Delete from Keycloak
+    await this.deleteUsersFromKeycloak(userIds);
+    
+    // 3. Delete from UserProfile
+    if (userIds.length > 0) {
+      await this.prisma.userProfile.deleteMany({ where: { userId: { in: userIds } } });
+    }
+
+    // 4. Delete associated records
     await this.prisma.tenantMember.deleteMany({ where: { tenantId } });
     await this.prisma.tenantSubscription.deleteMany({ where: { tenantId } });
     await this.prisma.tenantAlertPreference.deleteMany({ where: { tenantId } });
@@ -145,7 +157,19 @@ export class TenantsService {
   }
 
   async bulkDeleteTenants(tenantIds: string[]) {
-    // Delete associated records first
+    // 1. Get all members to delete their users entirely
+    const members = await this.prisma.tenantMember.findMany({ where: { tenantId: { in: tenantIds } } });
+    const userIds = members.map(m => m.userId);
+    
+    // 2. Delete from Keycloak
+    await this.deleteUsersFromKeycloak(userIds);
+    
+    // 3. Delete from UserProfile
+    if (userIds.length > 0) {
+      await this.prisma.userProfile.deleteMany({ where: { userId: { in: userIds } } });
+    }
+
+    // 4. Delete associated records
     await this.prisma.tenantMember.deleteMany({ where: { tenantId: { in: tenantIds } } });
     await this.prisma.tenantSubscription.deleteMany({ where: { tenantId: { in: tenantIds } } });
     await this.prisma.tenantAlertPreference.deleteMany({ where: { tenantId: { in: tenantIds } } });
@@ -153,6 +177,51 @@ export class TenantsService {
     return this.prisma.tenant.deleteMany({
       where: { id: { in: tenantIds } }
     });
+  }
+
+  private async deleteUsersFromKeycloak(userIds: string[]) {
+    if (userIds.length === 0) return;
+    try {
+      const issuer = process.env.KEYCLOAK_ISSUER || 'https://auth.enfycon.com/realms/enfycon-tender';
+      const tokenUrl = `${issuer}/protocol/openid-connect/token`;
+      const clientId = process.env.KEYCLOAK_CLIENT_ID || 'enfycon-tender';
+      const secret = process.env.KEYCLOAK_CLIENT_SECRET || '';
+      
+      const params = new URLSearchParams();
+      params.append('grant_type', 'client_credentials');
+      params.append('client_id', clientId);
+      params.append('client_secret', secret);
+      
+      const tokenRes = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params
+      });
+      
+      if (!tokenRes.ok) {
+        console.error('Failed to get Keycloak admin token:', await tokenRes.text());
+        return;
+      }
+      
+      const tokenData = await tokenRes.json();
+      const accessToken = tokenData.access_token;
+      
+      const urlParts = new URL(issuer);
+      const realm = urlParts.pathname.split('/').pop();
+      const adminBaseUrl = `${urlParts.origin}/admin/realms/${realm}/users`;
+      
+      for (const userId of userIds) {
+        const delRes = await fetch(`${adminBaseUrl}/${userId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + accessToken }
+        });
+        if (!delRes.ok && delRes.status !== 404) {
+          console.error(`Failed to delete user ${userId} from Keycloak:`, await delRes.text());
+        }
+      }
+    } catch (err) {
+      console.error('Error deleting users from Keycloak:', err);
+    }
   }
 
   // ---- Alert Preferences ----

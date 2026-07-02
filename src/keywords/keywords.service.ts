@@ -7,7 +7,7 @@ export class KeywordsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll() {
-    const keywords = await this.prisma.priorityKeyword.findMany({ orderBy: { createdAt: "asc" } });
+    const keywords = await this.prisma.priorityKeyword.findMany({ orderBy: { createdAt: "desc" } });
     
     // Fetch associated approved expansions
     const expansions = await this.prisma.keywordExpansion.findMany({

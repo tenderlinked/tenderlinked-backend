@@ -10,6 +10,8 @@ export class TenantRoleGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     
+    let authUserId: string | null = null;
+    
     // --- Super Admin Impersonation Bypass ---
     // If the requester is a Super Admin, we let them pass immediately.
     const authHeader = request.headers['authorization'];
@@ -21,6 +23,7 @@ export class TenantRoleGuard implements CanActivate {
         
         const email = decodedPayload.email;
         const sub = decodedPayload.sub;
+        authUserId = sub;
         
         const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS || 'admin@enfycon.com,sahadebbarman@gmail.com,deb@enfycon.com').split(',').map(e => e.trim().toLowerCase());
         const roles = decodedPayload?.realm_access?.roles || [];
@@ -39,16 +42,15 @@ export class TenantRoleGuard implements CanActivate {
     }
     // -----------------------------------------
 
-    // In Phase 3, the user context will be populated by Keycloak/Auth middleware
-    // For now, we expect userId and tenantId to be passed in the body or headers
-    const userId = request.body?.userId || request.headers['x-user-id'];
-    const tenantId = request.body?.tenantId || request.headers['x-tenant-id'];
+    // Use JWT sub as userId, or fallback to headers/body
+    const userId = authUserId || request.body?.userId || request.headers['x-user-id'];
+    let tenantIdOrSubdomain = request.params?.tenantId || request.body?.tenantId || request.headers['x-tenant-id'];
 
     if (!userId) {
       throw new ForbiddenException('User ID is missing');
     }
 
-    if (!tenantId) {
+    if (!tenantIdOrSubdomain) {
       // If no explicit tenantId is provided, fallback to finding their first tenant
       const member = await this.prisma.tenantMember.findFirst({
         where: { userId },
@@ -59,8 +61,20 @@ export class TenantRoleGuard implements CanActivate {
       return this.checkPermissions(context, member);
     }
 
+    // Check if tenantIdOrSubdomain is a subdomain (not a uuid)
+    let actualTenantId = tenantIdOrSubdomain;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actualTenantId)) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { subdomain: actualTenantId } });
+      if (!tenant) throw new ForbiddenException('Tenant not found');
+      actualTenantId = tenant.id;
+      // also mutate the request params so controllers get the UUID instead of the subdomain!
+      if (request.params?.tenantId) {
+        request.params.tenantId = actualTenantId;
+      }
+    }
+
     const member = await this.prisma.tenantMember.findUnique({
-      where: { tenantId_userId: { tenantId, userId } },
+      where: { tenantId_userId: { tenantId: actualTenantId, userId } },
       include: { customRole: true }
     });
 
@@ -72,7 +86,7 @@ export class TenantRoleGuard implements CanActivate {
   }
 
   private checkPermissions(context: ExecutionContext, member: any): boolean {
-    // Workspace owner has absolute full access
+    // Workspace owner has full access (and bypasses granular permissions)
     if (member.isOwner) return true;
 
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [

@@ -12,18 +12,23 @@ export class RolesService {
     });
   }
 
-  async createSystemRole(data: { name: string, description?: string, permissions: string[] }) {
+  async createSystemRole(data: { name: string, description?: string, permissions: string[], isDefaultAdmin?: boolean, isDefaultUser?: boolean }) {
+    if (data.isDefaultAdmin) await this.prisma.role.updateMany({ where: { isSystemRole: true, isDefaultAdmin: true }, data: { isDefaultAdmin: false } });
+    if (data.isDefaultUser) await this.prisma.role.updateMany({ where: { isSystemRole: true, isDefaultUser: true }, data: { isDefaultUser: false } });
+
     return this.prisma.role.create({
       data: {
         name: data.name,
         description: data.description,
         permissions: data.permissions,
-        isSystemRole: true
+        isSystemRole: true,
+        isDefaultAdmin: data.isDefaultAdmin || false,
+        isDefaultUser: data.isDefaultUser || false,
       }
     });
   }
 
-  async updateSystemRole(roleId: string, data: { name?: string, description?: string, permissions?: string[] }) {
+  async updateSystemRole(roleId: string, data: { name?: string, description?: string, permissions?: string[], isDefaultAdmin?: boolean, isDefaultUser?: boolean }) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, isSystemRole: true }
     });
@@ -32,6 +37,9 @@ export class RolesService {
       throw new NotFoundException("System role not found.");
     }
     
+    if (data.isDefaultAdmin) await this.prisma.role.updateMany({ where: { isSystemRole: true, isDefaultAdmin: true, id: { not: roleId } }, data: { isDefaultAdmin: false } });
+    if (data.isDefaultUser) await this.prisma.role.updateMany({ where: { isSystemRole: true, isDefaultUser: true, id: { not: roleId } }, data: { isDefaultUser: false } });
+
     return this.prisma.role.update({
       where: { id: roleId },
       data

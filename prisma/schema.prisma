@@ -82,6 +82,8 @@ model Role {
   description     String?
   
   isSystemRole    Boolean  @default(false)
+  isDefaultAdmin  Boolean  @default(false)
+  isDefaultUser   Boolean  @default(false)
   
   tenantId        String?
   tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)

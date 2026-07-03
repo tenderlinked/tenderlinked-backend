@@ -4,6 +4,7 @@ import { TenantsService } from './tenants.service';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { TenantRole } from '@prisma/client';
 
 @ApiTags('Tenants')
 @Controller('tenants')
@@ -23,8 +24,8 @@ export class TenantsController {
   @ApiOperation({ summary: "Add a member to a tenant workspace" })
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('members:manage')
-  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, roleId?: string, role?: 'ADMIN' | 'USER' }) {
-    return this.tenantsService.addMember(tenantId, body.email, body.roleId || '', body.role || 'USER');
+  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, roleId?: string }) {
+    return this.tenantsService.addMember(tenantId, body.email, body.roleId);
   }
 
   @Patch(':tenantId/members/:userId')
@@ -34,9 +35,9 @@ export class TenantsController {
   async updateMemberRole(
     @Param('tenantId') tenantId: string, 
     @Param('userId') userId: string, 
-    @Body() body: { roleId?: string, role?: 'ADMIN' | 'USER' }
+    @Body() body: { roleId: string }
   ) {
-    return this.tenantsService.updateMemberRole(tenantId, userId, body.roleId, body.role);
+    return this.tenantsService.updateMemberRole(tenantId, userId, body.roleId);
   }
 
   @Delete(':tenantId/members/:userId')

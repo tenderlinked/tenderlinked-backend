@@ -20,7 +20,7 @@ export class RolesController {
   @Post('system')
   @ApiOperation({ summary: "Create a system role (Super Admin only)" })
   @UseGuards(SuperAdminGuard)
-  async createSystemRole(@Body() body: { name: string, description?: string, permissions: string[] }) {
+  async createSystemRole(@Body() body: { name: string, description?: string, permissions: string[], isDefaultAdmin?: boolean, isDefaultUser?: boolean }) {
     return this.rolesService.createSystemRole(body);
   }
 
@@ -29,7 +29,7 @@ export class RolesController {
   @UseGuards(SuperAdminGuard)
   async updateSystemRole(
     @Param('roleId') roleId: string,
-    @Body() body: { name?: string, description?: string, permissions?: string[] }
+    @Body() body: { name?: string, description?: string, permissions?: string[], isDefaultAdmin?: boolean, isDefaultUser?: boolean }
   ) {
     return this.rolesService.updateSystemRole(roleId, body);
   }

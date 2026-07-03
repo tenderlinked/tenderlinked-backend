@@ -39,12 +39,18 @@ export class UsersService {
         },
       });
 
-      // 3. Assign the user as the OWNER of this new Tenant
+      // Fetch the default admin role
+      const defaultAdminRole = await this.prisma.role.findFirst({
+        where: { isDefaultAdmin: true, isSystemRole: true }
+      });
+
+      // 3. Assign the user as the OWNER of this new Tenant, and assign the default admin role
       await this.prisma.tenantMember.create({
         data: {
           userId,
           tenantId: tenant.id,
           role: 'OWNER',
+          roleId: defaultAdminRole?.id || undefined
         },
       });
 

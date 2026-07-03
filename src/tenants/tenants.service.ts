@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TenantRole } from '@prisma/client';
 
 @Injectable()
 export class TenantsService {
@@ -27,7 +28,7 @@ export class TenantsService {
     }));
   }
 
-  async addMember(tenantId: string, email: string, roleId: string, roleType: 'ADMIN' | 'USER' = 'USER') {
+  async addMember(tenantId: string, email: string, roleId?: string) {
     let profile = await this.prisma.userProfile.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } }
     });
@@ -55,11 +56,19 @@ export class TenantsService {
       });
     }
 
+    let resolvedRoleId = roleId;
+    if (!resolvedRoleId) {
+      const defaultUserRole = await this.prisma.role.findFirst({
+        where: { isDefaultUser: true, isSystemRole: true }
+      });
+      resolvedRoleId = defaultUserRole?.id || undefined;
+    }
+
     // 3. Upsert TenantMember
     return this.prisma.tenantMember.upsert({
       where: { tenantId_userId: { tenantId, userId: profile.userId } },
-      update: { roleId, role: roleType },
-      create: { tenantId, userId: profile.userId, roleId, role: roleType }
+      update: { roleId: resolvedRoleId },
+      create: { tenantId, userId: profile.userId, roleId: resolvedRoleId }
     });
   }
 
@@ -173,35 +182,15 @@ export class TenantsService {
     });
   }
 
-  async updateMemberRole(tenantId: string, userId: string, roleId?: string, roleType?: 'ADMIN' | 'USER') {
+  async updateMemberRole(tenantId: string, userId: string, roleId: string) {
     const member = await this.prisma.tenantMember.findUnique({
       where: { tenantId_userId: { tenantId, userId } }
     });
     if (!member) throw new NotFoundException("Member not found in this tenant");
 
-    // Don't allow changing role if they are the last owner
-    if (member.isOwner && roleType !== 'ADMIN') {
-      const ownersCount = await this.prisma.tenantMember.count({
-        where: { tenantId, isOwner: true }
-      });
-      if (ownersCount <= 1) {
-        throw new BadRequestException("Cannot change the role of the last owner of a tenant.");
-      }
-    }
-
-    const updateData: any = {};
-    if (roleId !== undefined) updateData.roleId = roleId || null;
-    if (roleType !== undefined) updateData.role = roleType;
-    
-    if (roleType === 'ADMIN') {
-        updateData.isOwner = true; // For legacy compatibility
-    } else if (roleType === 'USER') {
-        updateData.isOwner = false;
-    }
-
     return this.prisma.tenantMember.update({
       where: { tenantId_userId: { tenantId, userId } },
-      data: updateData
+      data: { roleId }
     });
   }
 

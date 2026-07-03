@@ -25,19 +25,20 @@ export class TenantsService {
     }));
   }
 
-  async inviteMember(tenantId: string, email: string, role: string = 'USER') {
-    // Basic implementation: Since we only have users in Keycloak right now,
-    // we would ideally send an email. For now, we'll just check if they have a profile,
-    // and if so, add them to the tenant. Otherwise return an error saying they must sign up first.
-    // A robust system uses an Invitation model, but we'll keep it simple for the SaaS template.
+  async addMember(tenantId: string, email: string, role: any) {
+    const profile = await this.prisma.userProfile.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } }
+    });
 
-    // Let's pretend we look up their userId by email (this requires Keycloak integration in reality)
-    // For this boilerplate, we'll assume the client passes the exact user ID, OR we just 
-    // find a user profile that matches the email (if we added email to profile).
-    // Let's just create an invitation record (we don't have an Invitation model in schema).
-    // So we'll throw a feature-not-complete error with instructions.
-    
-    throw new BadRequestException("Invitation system requires email service integration. (SaaS feature stub)");
+    if (!profile) {
+      throw new NotFoundException("User not found. Please ask them to register first.");
+    }
+
+    return this.prisma.tenantMember.upsert({
+      where: { tenantId_userId: { tenantId, userId: profile.userId } },
+      update: { role },
+      create: { tenantId, userId: profile.userId, role }
+    });
   }
 
   async removeMember(tenantId: string, userId: string) {

@@ -17,6 +17,13 @@ export class TenantsController {
     return this.tenantsService.getTenantMembers(tenantId);
   }
 
+  @Post(':tenantId/members')
+  @ApiOperation({ summary: "Add a member to a tenant workspace" })
+  @UseGuards(TenantRoleGuard)
+  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, role: string }) {
+    return this.tenantsService.addMember(tenantId, body.email, body.role as any);
+  }
+
   @Delete(':tenantId/members/:userId')
   @ApiOperation({ summary: "Remove a member from a tenant" })
   @UseGuards(TenantRoleGuard)

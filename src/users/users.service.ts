@@ -117,4 +117,11 @@ export class UsersService {
     });
     return { available: !profile };
   }
+
+  async promoteToSuperAdmin(userId: string) {
+    return this.prisma.userProfile.update({
+      where: { userId },
+      data: { globalRole: 'SUPER_ADMIN' }
+    });
+  }
 }

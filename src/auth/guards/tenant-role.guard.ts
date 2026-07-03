@@ -1,9 +1,11 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 
 @Injectable()
 export class TenantRoleGuard implements CanActivate {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private reflector: Reflector) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -49,27 +51,48 @@ export class TenantRoleGuard implements CanActivate {
     if (!tenantId) {
       // If no explicit tenantId is provided, fallback to finding their first tenant
       const member = await this.prisma.tenantMember.findFirst({
-        where: { userId }
+        where: { userId },
+        include: { customRole: true }
       });
       if (!member) throw new ForbiddenException('User does not belong to any tenant');
       
-      // We only allow OWNER or ADMIN to perform sensitive tenant actions
-      if (member.role !== 'OWNER' && member.role !== 'ADMIN') {
-        throw new ForbiddenException(`Access Denied: Requires OWNER or ADMIN role (Current: ${member.role})`);
-      }
-      return true;
+      return this.checkPermissions(context, member);
     }
 
     const member = await this.prisma.tenantMember.findUnique({
-      where: { tenantId_userId: { tenantId, userId } }
+      where: { tenantId_userId: { tenantId, userId } },
+      include: { customRole: true }
     });
 
     if (!member) {
       throw new ForbiddenException('You do not belong to this tenant');
     }
 
-    if (member.role !== 'OWNER' && member.role !== 'ADMIN') {
-      throw new ForbiddenException(`Access Denied: Requires OWNER or ADMIN role (Current: ${member.role})`);
+    return this.checkPermissions(context, member);
+  }
+
+  private checkPermissions(context: ExecutionContext, member: any): boolean {
+    // Workspace owner has absolute full access
+    if (member.isOwner) return true;
+
+    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    // If no specific permissions are required, just being a valid tenant member is enough
+    if (!requiredPermissions || requiredPermissions.length === 0) {
+      return true;
+    }
+
+    const userPermissions = member.customRole?.permissions || [];
+    
+    // Check if user has ALL required permissions, or the wildcard '*'
+    if (userPermissions.includes('*')) return true;
+
+    const hasAll = requiredPermissions.every(perm => userPermissions.includes(perm));
+    if (!hasAll) {
+      throw new ForbiddenException(`Missing required permissions. Needed: ${requiredPermissions.join(', ')}`);
     }
 
     return true;

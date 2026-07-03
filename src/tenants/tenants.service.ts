@@ -9,7 +9,8 @@ export class TenantsService {
 
   async getTenantMembers(tenantId: string) {
     const members = await this.prisma.tenantMember.findMany({
-      where: { tenantId }
+      where: { tenantId },
+      include: { customRole: true }
     });
 
     const userIds = members.map(m => m.userId);
@@ -21,24 +22,135 @@ export class TenantsService {
 
     return members.map(member => ({
       ...member,
-      userProfile: profileMap.get(member.userId) || null
+      userProfile: profileMap.get(member.userId) || null,
+      customRole: (member as any).customRole || null
     }));
   }
 
-  async addMember(tenantId: string, email: string, role: any) {
-    const profile = await this.prisma.userProfile.findFirst({
+  async addMember(tenantId: string, email: string, roleId: string, roleType: 'ADMIN' | 'USER' = 'USER') {
+    let profile = await this.prisma.userProfile.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } }
     });
 
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw new NotFoundException("Tenant not found");
+
     if (!profile) {
-      throw new NotFoundException("User not found. Please ask them to register first.");
+      // 1. User doesn't exist, create them in Keycloak
+      const tenantLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/login`;
+      const newUserId = await this.inviteUserToKeycloak(email, tenantLink, tenant.name);
+      
+      if (!newUserId) {
+        throw new BadRequestException("Failed to create user in authentication provider.");
+      }
+
+      // 2. Create UserProfile
+      // @ts-ignore
+      profile = await this.prisma.userProfile.create({
+        data: {
+          userId: newUserId,
+          email: email.toLowerCase(),
+          globalRole: 'USER'
+        }
+      });
     }
 
+    // 3. Upsert TenantMember
     return this.prisma.tenantMember.upsert({
       where: { tenantId_userId: { tenantId, userId: profile.userId } },
-      update: { role },
-      create: { tenantId, userId: profile.userId, role }
+      update: { roleId, role: roleType },
+      create: { tenantId, userId: profile.userId, roleId, role: roleType }
     });
+  }
+
+  private generateRandomPassword() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+    let pass = '';
+    for (let i = 0; i < 12; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return pass;
+  }
+
+  private async inviteUserToKeycloak(email: string, tenantLink: string, tenantName: string): Promise<string | null> {
+    try {
+      const issuer = process.env.KEYCLOAK_ISSUER || 'https://auth.enfycon.com/realms/enfycon-tender';
+      const tokenUrl = `${issuer}/protocol/openid-connect/token`;
+      const clientId = process.env.KEYCLOAK_CLIENT_ID || 'enfycon-tender';
+      const secret = process.env.KEYCLOAK_CLIENT_SECRET || '';
+      
+      const params = new URLSearchParams();
+      params.append('grant_type', 'client_credentials');
+      params.append('client_id', clientId);
+      params.append('client_secret', secret);
+      
+      const tokenRes = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params
+      });
+      
+      if (!tokenRes.ok) return null;
+      
+      const tokenData = await tokenRes.json();
+      const accessToken = tokenData.access_token;
+      
+      const urlParts = new URL(issuer);
+      const realm = urlParts.pathname.split('/').pop();
+      const adminBaseUrl = `${urlParts.origin}/admin/realms/${realm}/users`;
+      
+      const tempPassword = this.generateRandomPassword();
+
+      const createRes = await fetch(adminBaseUrl, {
+        method: 'POST',
+        headers: { 
+          'Authorization': 'Bearer ' + accessToken,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: email.toLowerCase(),
+          email: email.toLowerCase(),
+          enabled: true,
+          emailVerified: true,
+          credentials: [{
+            type: 'password',
+            value: tempPassword,
+            temporary: true
+          }]
+        })
+      });
+
+      if (!createRes.ok) {
+        console.error('Failed to create user in Keycloak:', await createRes.text());
+        return null;
+      }
+
+      const locationHeader = createRes.headers.get('location');
+      const newUserId = locationHeader ? locationHeader.split('/').pop() : null;
+
+      // TODO: Use a real mailer service here
+      console.log(`
+      =========================================================
+      [MOCK EMAIL] Invitation sent to: ${email}
+      Subject: You've been invited to ${tenantName}
+      
+      Hello!
+      
+      You have been invited to join the ${tenantName} workspace on Tender Tracker.
+      
+      Your Username: ${email}
+      Your Temporary Password: ${tempPassword}
+      
+      Please log in and you will be prompted to reset your password and set your keyword preferences.
+      Login Link: ${tenantLink}
+      =========================================================
+      `);
+
+      return newUserId || null;
+    } catch (err) {
+      console.error('Error inviting user via Keycloak:', err);
+      return null;
+    }
   }
 
   async removeMember(tenantId: string, userId: string) {
@@ -47,9 +159,9 @@ export class TenantsService {
     });
     if (!member) throw new NotFoundException("Member not found in this tenant");
     
-    if (member.role === 'OWNER') {
+    if (member.isOwner) {
       const ownersCount = await this.prisma.tenantMember.count({
-        where: { tenantId, role: 'OWNER' }
+        where: { tenantId, isOwner: true }
       });
       if (ownersCount <= 1) {
         throw new BadRequestException("Cannot remove the last owner of a tenant.");
@@ -58,6 +170,38 @@ export class TenantsService {
 
     return this.prisma.tenantMember.delete({
       where: { tenantId_userId: { tenantId, userId } }
+    });
+  }
+
+  async updateMemberRole(tenantId: string, userId: string, roleId?: string, roleType?: 'ADMIN' | 'USER') {
+    const member = await this.prisma.tenantMember.findUnique({
+      where: { tenantId_userId: { tenantId, userId } }
+    });
+    if (!member) throw new NotFoundException("Member not found in this tenant");
+
+    // Don't allow changing role if they are the last owner
+    if (member.isOwner && roleType !== 'ADMIN') {
+      const ownersCount = await this.prisma.tenantMember.count({
+        where: { tenantId, isOwner: true }
+      });
+      if (ownersCount <= 1) {
+        throw new BadRequestException("Cannot change the role of the last owner of a tenant.");
+      }
+    }
+
+    const updateData: any = {};
+    if (roleId !== undefined) updateData.roleId = roleId || null;
+    if (roleType !== undefined) updateData.role = roleType;
+    
+    if (roleType === 'ADMIN') {
+        updateData.isOwner = true; // For legacy compatibility
+    } else if (roleType === 'USER') {
+        updateData.isOwner = false;
+    }
+
+    return this.prisma.tenantMember.update({
+      where: { tenantId_userId: { tenantId, userId } },
+      data: updateData
     });
   }
 

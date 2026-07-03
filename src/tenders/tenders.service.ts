@@ -1,11 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { redactTenderBasedOnPlan } from "../common/utils/content-gating.util";
 
 @Injectable()
 export class TendersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getTenders(params: {
+    userId?: string | null;
     district?: string | null;
     search?: string | null;
     active?: string | null;
@@ -21,7 +23,7 @@ export class TendersService {
     tenderType?: string | null;
   }) {
     const {
-      district, search, active, priority, page, pageSize, date, excludeToday, tenderType
+      userId, district, search, active, priority, page, pageSize, date, excludeToday, tenderType
     } = params;
 
     const keywords = await this.prisma.priorityKeyword.findMany();
@@ -83,17 +85,63 @@ export class TendersService {
       this.prisma.tender.count({ where: { aiProcessed: false } }),
     ]);
 
+    // Get user's subscription and pricing plan to determine redaction
+    let allowedFields: string[] = [];
+    let unlockedTenderIds: Set<string> = new Set();
+    
+    if (userId) {
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { userId },
+        include: { 
+          tenant: { 
+            include: { subscription: true } 
+          }
+        }
+      });
+      
+      if (member?.tenant?.id) {
+        // Fetch unlocks for this tenant
+        const unlocks = await this.prisma.tenantUnlockedTender.findMany({
+          where: { tenantId: member.tenant.id, tenderId: { in: tenders.map(t => t.id) } },
+          select: { tenderId: true }
+        });
+        unlockedTenderIds = new Set(unlocks.map(u => u.tenderId));
+      }
+      
+      if (member?.tenant?.subscription?.planType) {
+        const plan = await this.prisma.pricingPlan.findUnique({
+          where: { name: member.tenant.subscription.planType }
+        });
+        if (plan) {
+          allowedFields = plan.allowedTenderFields;
+        }
+      } else {
+        // Fallback for default plan if no subscription
+        const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+        if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+      }
+    } else {
+      // Unauthenticated, apply default plan constraints
+      const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+      if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+    }
+
     const formattedTenders = tenders.map((t: any) => {
       const hasHighPriorityTag = t.tags && t.tags.some((tag: string) => keywordList.some((kw: string) => tag.toLowerCase().includes(kw.toLowerCase())));
       const titleMatch = keywordList.some((kw: string) => t.title?.toLowerCase().includes(kw.toLowerCase()));
       const summaryMatch = keywordList.some((kw: string) => t.aiSummary?.toLowerCase().includes(kw.toLowerCase()));
-      return {
+      
+      const enhancedTender = {
         ...t,
         isHighPriority: hasHighPriorityTag || titleMatch || summaryMatch,
         // TODO: In Phase 3, this will be fetched from TenantTenderAction using the authenticated user's tenantId
         isBookmarked: false,
         isApplied: false,
       };
+
+      // Apply content gating
+      const isUnlockedWithCredit = unlockedTenderIds.has(t.id);
+      return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
     });
 
     return {

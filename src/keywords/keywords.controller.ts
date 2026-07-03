@@ -12,7 +12,8 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from "@nestjs/swagger";
 import { KeywordsService } from "./keywords.service";
-import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
+import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags("Keywords")
 @Controller("keywords")
@@ -21,6 +22,8 @@ export class KeywordsController {
 
   @Get()
   @ApiOperation({ summary: "Get all keywords" })
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:read')
   async getAll() {
     try {
       const data = await this.keywordsService.findAll();
@@ -33,7 +36,8 @@ export class KeywordsController {
 
   @Post()
   @ApiOperation({ summary: "Create a new keyword" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { word: { type: "string" } } } })
   async create(@Body() body: { word: string }) {
     try {
@@ -47,7 +51,8 @@ export class KeywordsController {
 
   @Delete()
   @ApiOperation({ summary: "Delete a keyword" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   @ApiQuery({ name: "id", required: true, description: "Keyword ID" })
   async remove(@Query("id") id: string) {
     try {
@@ -63,7 +68,8 @@ export class KeywordsController {
 
   @Post('expansions')
   @ApiOperation({ summary: "Manually add a keyword to the expansion dictionary" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { baseWord: { type: "string" }, expansions: { type: "array", items: { type: "string" } }, status: { type: "string" } } } })
   async createExpansion(@Body() body: { baseWord: string, expansions?: string[], status?: string }) {
     const data = await this.keywordsService.createExpansion(body.baseWord, body.expansions, body.status);
@@ -72,7 +78,8 @@ export class KeywordsController {
 
   @Get('expansions/pending')
   @ApiOperation({ summary: "Get pending keyword expansions" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:read')
   async getPendingExpansions() {
     const data = await this.keywordsService.getPendingExpansions();
     return { success: true, data };
@@ -80,7 +87,8 @@ export class KeywordsController {
 
   @Post('expansions/generate-and-save')
   @ApiOperation({ summary: "Generate expansions via AI and save immediately" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { baseWord: { type: "string" } } } })
   async generateAndSaveExpansion(@Body() body: { baseWord: string }) {
     const data = await this.keywordsService.generateAndSaveExpansion(body.baseWord);
@@ -89,7 +97,8 @@ export class KeywordsController {
 
   @Post('expansions/:id/ai-suggest')
   @ApiOperation({ summary: "Auto-expand a keyword using AI" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   async autoExpand(@Param('id') id: string) {
     const expansions = await this.keywordsService.autoExpandKeyword(id);
     return { success: true, data: expansions };
@@ -97,7 +106,8 @@ export class KeywordsController {
 
   @Post('ai-suggest-new')
   @ApiOperation({ summary: "Suggest expansions for a new word without saving" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { word: { type: "string" } } } })
   async aiSuggestNew(@Body() body: { word: string }) {
     const expansions = await this.keywordsService.generateExpansionsFromAI(body.word);
@@ -106,7 +116,8 @@ export class KeywordsController {
 
   @Put('expansions/:id/approve')
   @ApiOperation({ summary: "Approve and save expansions" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   async approveExpansion(@Param('id') id: string, @Body() body: { expansions: string[] }) {
     const data = await this.keywordsService.approveExpansion(id, body.expansions);
     return { success: true, data };
@@ -114,7 +125,8 @@ export class KeywordsController {
 
   @Put('expansions/:id/reject')
   @ApiOperation({ summary: "Reject a keyword expansion" })
-  @UseGuards(SuperAdminGuard)
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('keywords:manage')
   async rejectExpansion(@Param('id') id: string) {
     const data = await this.keywordsService.rejectExpansion(id);
     return { success: true, data };

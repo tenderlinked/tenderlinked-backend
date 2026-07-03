@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Patch, Param, Body, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { TenantsService } from './tenants.service';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Tenants')
 @Controller('tenants')
@@ -13,6 +14,7 @@ export class TenantsController {
   @Get(':tenantId/members')
   @ApiOperation({ summary: "Get all members of a tenant workspace" })
   @UseGuards(TenantRoleGuard)
+  @RequirePermissions('members:read')
   async getMembers(@Param('tenantId') tenantId: string) {
     return this.tenantsService.getTenantMembers(tenantId);
   }
@@ -20,13 +22,27 @@ export class TenantsController {
   @Post(':tenantId/members')
   @ApiOperation({ summary: "Add a member to a tenant workspace" })
   @UseGuards(TenantRoleGuard)
-  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, role: string }) {
-    return this.tenantsService.addMember(tenantId, body.email, body.role as any);
+  @RequirePermissions('members:manage')
+  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, roleId?: string, role?: 'ADMIN' | 'USER' }) {
+    return this.tenantsService.addMember(tenantId, body.email, body.roleId || '', body.role || 'USER');
+  }
+
+  @Patch(':tenantId/members/:userId')
+  @ApiOperation({ summary: "Update a member's role" })
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('members:manage')
+  async updateMemberRole(
+    @Param('tenantId') tenantId: string, 
+    @Param('userId') userId: string, 
+    @Body() body: { roleId?: string, role?: 'ADMIN' | 'USER' }
+  ) {
+    return this.tenantsService.updateMemberRole(tenantId, userId, body.roleId, body.role);
   }
 
   @Delete(':tenantId/members/:userId')
   @ApiOperation({ summary: "Remove a member from a tenant" })
   @UseGuards(TenantRoleGuard)
+  @RequirePermissions('members:manage')
   async removeMember(@Param('tenantId') tenantId: string, @Param('userId') userId: string) {
     return this.tenantsService.removeMember(tenantId, userId);
   }
@@ -34,6 +50,7 @@ export class TenantsController {
   @Post(':tenantId/subdomain')
   @ApiOperation({ summary: "Update the subdomain for a tenant" })
   @UseGuards(TenantRoleGuard)
+  @RequirePermissions('settings:manage')
   async updateSubdomain(@Param('tenantId') tenantId: string, @Body() body: { subdomain: string }) {
     return this.tenantsService.updateSubdomain(tenantId, body.subdomain);
   }

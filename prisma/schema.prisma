@@ -13,7 +13,7 @@ enum GlobalRole {
   USER
 }
 
-// Tenant Roles for RBAC within an organization
+// Legacy Tenant Roles for fallback/core logic
 enum TenantRole {
   OWNER
   ADMIN
@@ -35,6 +35,8 @@ model Tenant {
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  
+  roles           Role[]   // Custom roles created for this tenant
 }
 
 model TenantAlertPreference {
@@ -59,12 +61,37 @@ model TenantMember {
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   
   userId          String   // Maps to Keycloak User ID or UserProfile
+  
+  isOwner         Boolean  @default(false) // Absolute owner of the workspace
+  
+  roleId          String?
+  customRole      Role?    @relation(fields: [roleId], references: [id])
+  
+  // Legacy enum, keeping it temporarily for backward compatibility during migration
   role            TenantRole @default(MEMBER)
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@unique([tenantId, userId]) // A user can only have one membership per tenant
+}
+
+model Role {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  
+  isSystemRole    Boolean  @default(false)
+  
+  tenantId        String?
+  tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  permissions     String[] @default([])
+  
+  members         TenantMember[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model TenantSubscription {
@@ -79,12 +106,39 @@ model TenantSubscription {
   startDate       DateTime
   endDate         DateTime
   
+  // Credits and Usage
+  availableCredits       Int @default(0)
+  tendersViewedThisMonth Int @default(0)
+  
   paymentMethod   String?  // "RAZORPAY_SUB", "MANUAL", etc.
   paymentId       String?  // e.g. Razorpay payment ID / Subscription ID
   amount          Float?
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model PricingPlan {
+  id                  String   @id @default(uuid())
+  name                String   @unique // "TRIAL", "BASIC", "PROFESSIONAL", "ENTERPRISE"
+  price               Float?
+  allowedTenderFields String[] @default([]) // e.g. ["tenderValue", "emd", "aiSummary"]
+  
+  // Hard Limits & Credits
+  monthlyCredits      Int      @default(0)
+  maxKeywords         Int      @default(3)
+  maxStates           Int      @default(1)
+  maxTenderViews      Int      @default(50)
+  
+  // Alerts
+  hasEmailAlerts      Boolean  @default(false)
+  hasWhatsappAlerts   Boolean  @default(false)
+  hasSmsAlerts        Boolean  @default(false)
+  
+  isDefault           Boolean  @default(false)
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 model UserProfile {
@@ -163,6 +217,17 @@ model TenantTenderAction {
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, tenderId])
+}
+
+model TenantUnlockedTender {
+  id              String   @id @default(uuid())
+  
+  tenantId        String
+  tenderId        String
+  
+  unlockedAt      DateTime @default(now())
 
   @@unique([tenantId, tenderId])
 }

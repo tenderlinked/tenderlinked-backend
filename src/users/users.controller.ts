@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
@@ -16,8 +16,24 @@ export class UsersController {
   }
 
   @Get('profile/:userId')
-  async getProfile(@Param('userId') userId: string, @Query('email') email?: string) {
-    return this.usersService.getProfile(userId, email);
+  async getProfile(@Param('userId') userId: string, @Query('email') email?: string, @Req() req?: any) {
+    let isKeycloakSuperAdmin = false;
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        const roles = decodedPayload?.realm_access?.roles || [];
+        if (roles.includes('SUPER_ADMIN') || roles.includes('super_admin')) {
+          isKeycloakSuperAdmin = true;
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    }
+    
+    return this.usersService.getProfile(userId, email, isKeycloakSuperAdmin);
   }
 
   @Get('profile/check-phone/:phone')

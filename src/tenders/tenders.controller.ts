@@ -7,6 +7,7 @@ import {
   Body,
   BadRequestException,
   InternalServerErrorException,
+  Req,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiQuery, ApiBody } from "@nestjs/swagger";
 import { TendersService } from "./tenders.service";
@@ -44,10 +45,25 @@ export class TendersController {
     @Query("applied") applied?: string,
     @Query("dateRange") dateRange?: string,
     @Query("includeStats") includeStats?: string,
-    @Query("tenderType") tenderType?: string
+    @Query("tenderType") tenderType?: string,
+    @Req() req?: any
   ) {
     try {
+      let userId: string | null = null;
+      const authHeader = req?.headers?.['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.split(' ')[1];
+          const payloadBase64 = token.split('.')[1];
+          const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+          userId = decodedPayload.sub;
+        } catch (e) {
+          // Ignore
+        }
+      }
+
       return await this.tendersService.getTenders({
+        userId,
         district: district || null,
         search: search || null,
         active: active || null,

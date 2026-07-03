@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createProfile(userId: string, email?: string, phoneNumber?: string, companyName?: string, username?: string) {
+  async createProfile(userId: string, email?: string, phoneNumber?: string, companyName?: string, username?: string, isKeycloakSuperAdmin?: boolean) {
     try {
       // 1. Create the User Profile
       // @ts-ignore
@@ -15,7 +15,7 @@ export class UsersService {
           email,
           phoneNumber,
           companyName,
-          // Defaults to globalRole: USER
+          globalRole: isKeycloakSuperAdmin ? 'SUPER_ADMIN' : 'USER',
         },
       });
 
@@ -55,17 +55,30 @@ export class UsersService {
     }
   }
 
-  async getProfile(userId: string, email?: string) {
+  async getProfile(userId: string, email?: string, isKeycloakSuperAdmin?: boolean) {
     let profile = await this.prisma.userProfile.findUnique({
       where: { userId },
     });
     
-    // Sync email from Keycloak if missing or outdated
+    // Sync email and role from Keycloak if missing or outdated
+    let needsUpdate = false;
+    const updateData: any = {};
+    
     if (profile && email && (profile as any).email !== email) {
+      updateData.email = email;
+      needsUpdate = true;
+    }
+    
+    if (profile && isKeycloakSuperAdmin && (profile as any).globalRole !== 'SUPER_ADMIN') {
+      updateData.globalRole = 'SUPER_ADMIN';
+      needsUpdate = true;
+    }
+    
+    if (needsUpdate) {
       // @ts-ignore
       profile = await this.prisma.userProfile.update({
         where: { userId },
-        data: { email }
+        data: updateData
       });
     }
     
@@ -78,7 +91,7 @@ export class UsersService {
     if (!profile || !member) {
       if (!profile) {
         // Try creating profile and tenant
-        const newProfile = await this.createProfile(userId);
+        const newProfile = await this.createProfile(userId, email, undefined, undefined, undefined, isKeycloakSuperAdmin);
         profile = await this.prisma.userProfile.findUnique({ where: { userId } });
       } else if (!member) {
         // User has a profile but no tenant, let's create a default tenant for them

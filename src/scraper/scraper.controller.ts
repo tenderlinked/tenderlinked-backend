@@ -3,16 +3,19 @@ import {
   Post,
   Req,
   Body,
-  UnauthorizedException,
   BadRequestException,
   HttpCode,
+  UseGuards,
 } from "@nestjs/common";
 import type { Request } from "express";
 import { ApiTags, ApiOperation, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { ScraperService } from "./scraper.service";
 import { DISTRICTS } from "./districts";
+import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
+import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 
 @ApiTags("Scraper")
+@ApiBearerAuth()
 @Controller("scrape")
 export class ScraperController {
   constructor(private readonly scraperService: ScraperService) {}
@@ -21,24 +24,17 @@ export class ScraperController {
   @HttpCode(200)
   @ApiOperation({ summary: "Trigger manual scrape" })
   @ApiBearerAuth("cron-secret")
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions("tenders:scrape")
   @ApiBody({ schema: { properties: { district: { type: "string", description: "Optional district name or 'state'" } } } })
   async scrape(
     @Req() req: Request,
     @Body() body: { district?: string } = {}
   ) {
-    // Basic authentication: requires either a frontend 'auth' cookie or a valid CRON_SECRET header
-    const authCookie = req.cookies?.["auth"] || req.cookies?.["next-auth.session-token"] || req.cookies?.["__Secure-next-auth.session-token"];
     const authHeader = req.headers["authorization"];
     const cronSecret = process.env.CRON_SECRET;
-
-    const isFrontendUser = !!authCookie;
-    const isCronJob = cronSecret && authHeader === `Bearer ${cronSecret}`;
-
-    if (!isFrontendUser && !isCronJob) {
-      throw new UnauthorizedException("Unauthorized");
-    }
-
-    const source = isFrontendUser ? "MANUAL" : "AUTO";
+    const isCronJob = !!(cronSecret && authHeader === `Bearer ${cronSecret}`);
+    const source = isCronJob ? "AUTO" : "MANUAL";
 
     let targetDistrict: string | null = null;
 
@@ -87,9 +83,11 @@ export class ScraperController {
 
   @Post("stop")
   @HttpCode(200)
-  @ApiOperation({ summary: "Stop any manual scrape" })
+  @ApiOperation({ summary: "Stop current scrape operation" })
   @ApiBearerAuth("cron-secret")
-  stopScrape() {
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions("tenders:scrape")
+  async stopScrape(@Req() req: Request) {
     this.scraperService.stopScrape();
     return { success: true, message: "Scraping stopped" };
   }

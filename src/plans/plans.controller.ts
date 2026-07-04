@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Body, Put, Param, Delete, UseGuards } from '@nestjs/common';
 import { PlansService } from './plans.service';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('Plans')
+@ApiBearerAuth()
 @Controller('api/plans')
 export class PlansController {
   constructor(private readonly plansService: PlansService) {}

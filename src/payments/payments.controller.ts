@@ -1,8 +1,9 @@
-import { Controller, Post, Body, Headers, BadRequestException, Get, Param } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Post, Body, Headers, BadRequestException, Get, Param, Req } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 
 @ApiTags('Payments')
+@ApiBearerAuth()
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
@@ -11,8 +12,24 @@ export class PaymentsController {
   // RAZORPAY
   // ==========================================
 
+  private extractAndVerifyUserId(req: any, expectedUserId: string) {
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        if (decodedPayload.sub === expectedUserId) return true;
+      } catch (e) {
+        // Ignore
+      }
+    }
+    throw new BadRequestException("Unauthorized access to user payments");
+  }
+
   @Post('create-order')
-  async createOrder(@Body() body: { amount: number; userId: string; planType: string }) {
+  async createOrder(@Req() req: any, @Body() body: { amount: number; userId: string; planType: string }) {
+    this.extractAndVerifyUserId(req, body.userId);
     return this.paymentsService.createOrder(body.userId, body.planType, body.amount);
   }
 
@@ -43,7 +60,8 @@ export class PaymentsController {
   }
 
   @Post('create-subscription')
-  async createSubscription(@Body() body: { userId: string; planType: string }) {
+  async createSubscription(@Req() req: any, @Body() body: { userId: string; planType: string }) {
+    this.extractAndVerifyUserId(req, body.userId);
     return this.paymentsService.createSubscription(body.userId, body.planType);
   }
 
@@ -78,10 +96,11 @@ export class PaymentsController {
   }
 
   @Post('cancel-subscription')
-  async cancelSubscription(@Body() body: { userId: string }) {
+  async cancelSubscription(@Req() req: any, @Body() body: { userId: string }) {
     if (!body.userId) {
       throw new BadRequestException("Missing userId");
     }
+    this.extractAndVerifyUserId(req, body.userId);
     return this.paymentsService.cancelSubscription(body.userId);
   }
 }

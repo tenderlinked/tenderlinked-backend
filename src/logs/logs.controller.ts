@@ -1,9 +1,12 @@
-import { Controller, Get, Query, InternalServerErrorException } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery } from "@nestjs/swagger";
+import { Controller, Get, Query, InternalServerErrorException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth } from "@nestjs/swagger";
 import { LogsService } from "./logs.service";
+import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Logs")
+@ApiBearerAuth()
 @Controller("logs")
+@UseGuards(SuperAdminGuard)
 export class LogsController {
   constructor(private readonly logsService: LogsService) {}
 

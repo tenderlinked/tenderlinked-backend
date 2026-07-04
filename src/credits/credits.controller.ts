@@ -1,13 +1,19 @@
 import { Controller, Post, Get, Param, Req } from '@nestjs/common';
 import { CreditsService } from './credits.service';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { UseGuards } from '@nestjs/common';
 
 @ApiTags('Credits')
+@ApiBearerAuth()
 @Controller('api')
+@UseGuards(TenantRoleGuard)
 export class CreditsController {
   constructor(private readonly creditsService: CreditsService) {}
 
   @Post('tenders/:id/unlock')
+  @RequirePermissions('tenders:read')
   @ApiOperation({ summary: 'Spend 1 credit to unlock a tender document' })
   async unlockTender(@Param('id') tenderId: string, @Req() req: any) {
     const userId = this.extractUserId(req);
@@ -17,6 +23,7 @@ export class CreditsController {
   }
 
   @Get('billing/usage')
+  @RequirePermissions('tenders:read')
   @ApiOperation({ summary: 'Get current credit balance and limits' })
   async getUsage(@Req() req: any) {
     const userId = this.extractUserId(req);

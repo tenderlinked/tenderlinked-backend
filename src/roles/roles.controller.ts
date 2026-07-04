@@ -1,11 +1,12 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { RolesService } from './roles.service';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags('Roles')
+@ApiBearerAuth()
 @Controller('roles')
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}

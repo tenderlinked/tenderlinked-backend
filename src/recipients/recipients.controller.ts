@@ -7,11 +7,15 @@ import {
   Query,
   InternalServerErrorException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { RecipientsService } from "./recipients.service";
+import { UseGuards } from "@nestjs/common";
+import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Recipients")
+@ApiBearerAuth()
 @Controller("recipients")
+@UseGuards(SuperAdminGuard)
 export class RecipientsController {
   constructor(private readonly recipientsService: RecipientsService) {}
 

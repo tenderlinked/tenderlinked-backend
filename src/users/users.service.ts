@@ -90,7 +90,11 @@ export class UsersService {
     
     let member = await this.prisma.tenantMember.findFirst({
       where: { userId },
-      include: { tenant: true }
+      include: { 
+        tenant: {
+          include: { subscription: true }
+        }
+      }
     });
 
     // Auto-create profile and tenant if they don't exist (e.g., OAuth login without going through registration form)
@@ -120,7 +124,11 @@ export class UsersService {
       // Re-fetch member after creation
       member = await this.prisma.tenantMember.findFirst({
         where: { userId },
-        include: { tenant: true }
+        include: { 
+          tenant: {
+            include: { subscription: true }
+          }
+        }
       });
     }
 

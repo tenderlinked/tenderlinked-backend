@@ -1,9 +1,12 @@
-import { Controller, Post, HttpCode, InternalServerErrorException } from "@nestjs/common";
-import { ApiTags, ApiOperation } from "@nestjs/swagger";
+import { Controller, Post, HttpCode, InternalServerErrorException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { QueueService } from "./queue.service";
+import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Queue")
+@ApiBearerAuth()
 @Controller("queue")
+@UseGuards(SuperAdminGuard)
 export class QueueController {
   constructor(private readonly queueService: QueueService) {}
 

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Delete, Patch, Param, Body, UseGuards, Req } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { TenantsService } from './tenants.service';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
@@ -7,6 +7,7 @@ import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { TenantRole } from '@prisma/client';
 
 @ApiTags('Tenants')
+@ApiBearerAuth()
 @Controller('tenants')
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
@@ -96,6 +97,14 @@ export class TenantsController {
   @UseGuards(SuperAdminGuard)
   async removeMemberAdmin(@Param('tenantId') tenantId: string, @Param('userId') userId: string) {
     return this.tenantsService.removeMember(tenantId, userId);
+  }
+
+  @Post(':tenantId/admin/members/:userId/owner')
+  @ApiOperation({ summary: "Toggle owner status of a member (Super Admin)" })
+  @UseGuards(SuperAdminGuard)
+  @ApiBody({ schema: { properties: { isOwner: { type: "boolean" } } } })
+  async toggleOwnerAdmin(@Param('tenantId') tenantId: string, @Param('userId') userId: string, @Body() body: { isOwner: boolean }) {
+    return this.tenantsService.toggleOwnerStatus(tenantId, userId, body.isOwner);
   }
 
   @Post('bulk-delete')

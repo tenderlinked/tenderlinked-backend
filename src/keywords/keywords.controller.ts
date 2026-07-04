@@ -10,12 +10,13 @@ import {
   UseGuards,
   InternalServerErrorException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { KeywordsService } from "./keywords.service";
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags("Keywords")
+@ApiBearerAuth()
 @Controller("keywords")
 export class KeywordsController {
   constructor(private readonly keywordsService: KeywordsService) {}

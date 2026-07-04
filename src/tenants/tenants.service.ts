@@ -57,6 +57,8 @@ export class TenantsService {
     }
 
     let resolvedRoleId = roleId;
+    let isOwnerRole = false;
+
     if (!resolvedRoleId) {
       const defaultUserRole = await this.prisma.role.findFirst({
         where: { isDefaultUser: true, isSystemRole: true }
@@ -64,11 +66,18 @@ export class TenantsService {
       resolvedRoleId = defaultUserRole?.id || undefined;
     }
 
+    if (resolvedRoleId) {
+      const role = await this.prisma.role.findUnique({ where: { id: resolvedRoleId } });
+      if (role && role.name.toLowerCase().includes('owner')) {
+        isOwnerRole = true;
+      }
+    }
+
     // 3. Upsert TenantMember
     return this.prisma.tenantMember.upsert({
       where: { tenantId_userId: { tenantId, userId: profile.userId } },
-      update: { roleId: resolvedRoleId },
-      create: { tenantId, userId: profile.userId, roleId: resolvedRoleId }
+      update: { roleId: resolvedRoleId, isOwner: isOwnerRole },
+      create: { tenantId, userId: profile.userId, roleId: resolvedRoleId, isOwner: isOwnerRole }
     });
   }
 
@@ -188,9 +197,49 @@ export class TenantsService {
     });
     if (!member) throw new NotFoundException("Member not found in this tenant");
 
+    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new NotFoundException("Role not found");
+
+    const isOwnerRole = role.name.toLowerCase().includes('owner');
+
+    if (!isOwnerRole && member.isOwner) {
+      // If removing ownership, ensure there's at least one owner left
+      const ownersCount = await this.prisma.tenantMember.count({
+        where: { tenantId, isOwner: true }
+      });
+      if (ownersCount <= 1) {
+        throw new BadRequestException("Cannot remove the last owner of a tenant. At least one member must be an owner.");
+      }
+    }
+
     return this.prisma.tenantMember.update({
       where: { tenantId_userId: { tenantId, userId } },
-      data: { roleId }
+      data: { 
+        roleId,
+        isOwner: isOwnerRole
+      }
+    });
+  }
+
+  async toggleOwnerStatus(tenantId: string, userId: string, isOwner: boolean) {
+    const member = await this.prisma.tenantMember.findUnique({
+      where: { tenantId_userId: { tenantId, userId } }
+    });
+    if (!member) throw new NotFoundException("Member not found in this tenant");
+
+    // If removing ownership, ensure there's at least one owner left
+    if (!isOwner && member.isOwner) {
+      const ownersCount = await this.prisma.tenantMember.count({
+        where: { tenantId, isOwner: true }
+      });
+      if (ownersCount <= 1) {
+        throw new BadRequestException("Cannot remove the last owner of a tenant. At least one member must be an owner.");
+      }
+    }
+
+    return this.prisma.tenantMember.update({
+      where: { tenantId_userId: { tenantId, userId } },
+      data: { isOwner }
     });
   }
 

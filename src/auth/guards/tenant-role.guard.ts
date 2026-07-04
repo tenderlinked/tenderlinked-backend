@@ -10,11 +10,29 @@ export class TenantRoleGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     
+    // --- Subdomain to UUID Resolution ---
+    // Resolve subdomain to UUID early so controllers always get a UUID in request.params
+    let tenantIdOrSubdomain = request.params?.tenantId || request.body?.tenantId || request.headers['x-tenant-id'];
+    if (tenantIdOrSubdomain && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantIdOrSubdomain)) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { subdomain: tenantIdOrSubdomain } });
+      if (!tenant) throw new ForbiddenException('Tenant not found');
+      tenantIdOrSubdomain = tenant.id;
+      if (request.params?.tenantId) request.params.tenantId = tenant.id;
+      if (request.body?.tenantId) request.body.tenantId = tenant.id;
+    }
+
     let authUserId: string | null = null;
     
+    const authHeader = request.headers['authorization'];
+
+    // --- Cron Job Bypass ---
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+      return true;
+    }
+
     // --- Super Admin Impersonation Bypass ---
     // If the requester is a Super Admin, we let them pass immediately.
-    const authHeader = request.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
         const token = authHeader.split(' ')[1];
@@ -44,7 +62,6 @@ export class TenantRoleGuard implements CanActivate {
 
     // Use JWT sub as userId, or fallback to headers/body
     const userId = authUserId || request.body?.userId || request.headers['x-user-id'];
-    let tenantIdOrSubdomain = request.params?.tenantId || request.body?.tenantId || request.headers['x-tenant-id'];
 
     if (!userId) {
       throw new ForbiddenException('User ID is missing');
@@ -54,32 +71,36 @@ export class TenantRoleGuard implements CanActivate {
       // If no explicit tenantId is provided, fallback to finding their first tenant
       const member = await this.prisma.tenantMember.findFirst({
         where: { userId },
-        include: { customRole: true }
+        include: { 
+          customRole: true,
+          tenant: { include: { subscription: true } }
+        }
       });
       if (!member) throw new ForbiddenException('User does not belong to any tenant');
+      
+      if (member.tenant?.subscription?.status === 'SUSPENDED') {
+        throw new ForbiddenException('This workspace has been suspended. Please contact support.');
+      }
       
       return this.checkPermissions(context, member);
     }
 
-    // Check if tenantIdOrSubdomain is a subdomain (not a uuid)
-    let actualTenantId = tenantIdOrSubdomain;
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actualTenantId)) {
-      const tenant = await this.prisma.tenant.findUnique({ where: { subdomain: actualTenantId } });
-      if (!tenant) throw new ForbiddenException('Tenant not found');
-      actualTenantId = tenant.id;
-      // also mutate the request params so controllers get the UUID instead of the subdomain!
-      if (request.params?.tenantId) {
-        request.params.tenantId = actualTenantId;
-      }
-    }
+    const actualTenantId = tenantIdOrSubdomain;
 
     const member = await this.prisma.tenantMember.findUnique({
       where: { tenantId_userId: { tenantId: actualTenantId, userId } },
-      include: { customRole: true }
+      include: { 
+        customRole: true,
+        tenant: { include: { subscription: true } }
+      }
     });
 
     if (!member) {
       throw new ForbiddenException('You do not belong to this tenant');
+    }
+
+    if (member.tenant?.subscription?.status === 'SUSPENDED') {
+      throw new ForbiddenException('This workspace has been suspended. Please contact support.');
     }
 
     return this.checkPermissions(context, member);

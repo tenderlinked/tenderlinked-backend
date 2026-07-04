@@ -5,11 +5,15 @@ import {
   Body,
   InternalServerErrorException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { SettingsService } from "./settings.service";
+import { UseGuards } from "@nestjs/common";
+import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Settings")
+@ApiBearerAuth()
 @Controller("settings")
+@UseGuards(SuperAdminGuard)
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 

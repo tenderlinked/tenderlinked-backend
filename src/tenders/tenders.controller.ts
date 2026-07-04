@@ -9,15 +9,21 @@ import {
   InternalServerErrorException,
   Req,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { TendersService } from "./tenders.service";
+import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
+import { RequirePermissions } from "../auth/decorators/permissions.decorator";
+import { UseGuards } from "@nestjs/common";
 
 @ApiTags("Tenders")
+@ApiBearerAuth()
 @Controller("tenders")
 export class TendersController {
   constructor(private readonly tendersService: TendersService) {}
 
   @Get()
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Get a paginated list of tenders" })
   @ApiQuery({ name: "district", required: false, description: "Filter by district" })
   @ApiQuery({ name: "search", required: false, description: "Search term" })
@@ -88,6 +94,8 @@ export class TendersController {
   }
 
   @Patch(":id/bookmark")
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Update bookmark status of a tender" })
   @ApiBody({ schema: { properties: { isBookmarked: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateBookmark(
@@ -111,6 +119,8 @@ export class TendersController {
   }
 
   @Patch(":id/applied")
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Update applied status of a tender" })
   @ApiBody({ schema: { properties: { isApplied: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateApplied(
@@ -134,6 +144,8 @@ export class TendersController {
   }
 
   @Patch(":id/retry-ai")
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('settings:manage')
   @ApiOperation({ summary: "Retry AI processing for a tender" })
   @ApiQuery({ name: "state", required: false, description: "Is this a state tender (true)" })
   async retryAi(

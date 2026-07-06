@@ -130,8 +130,8 @@ export class ScraperService {
         }
 
         if (duplicateCount === rawTenders.length && rawTenders.length > 0) {
-          console.warn(
-            `[Scraper Warning] District ${district} pagination loop detected at page ${page}. Breaking.`
+          console.log(
+            `[Scraper Info] District ${district} has no more pages (same content returned on page ${page}). Stopping pagination.`
           );
           hasMore = false;
           break;

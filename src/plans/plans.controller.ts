@@ -5,7 +5,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('Plans')
 @ApiBearerAuth()
-@Controller('api/plans')
+@Controller('plans')
 export class PlansController {
   constructor(private readonly plansService: PlansService) {}
 

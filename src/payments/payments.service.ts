@@ -102,12 +102,15 @@ export class PaymentsService {
       throw new BadRequestException("Invalid payment signature");
     }
 
+    const { eligible } = await this.checkTrialEligibility(userId);
+
     await this.createSubscriptionAfterSuccess(
       userId,
       planType,
       "RAZORPAY",
       razorpayPaymentId,
-      amount
+      amount,
+      eligible
     );
 
     return { success: true };
@@ -134,7 +137,7 @@ export class PaymentsService {
     const normalizedPlan = planType.toLowerCase();
 
     if (isTrial) {
-      endDate.setDate(endDate.getDate() + 30);
+      endDate.setDate(endDate.getDate() + 14);
     } else {
       if (normalizedPlan === "monthly") {
         endDate.setMonth(endDate.getMonth() + 1);

@@ -250,6 +250,48 @@ model ScrapeLog {
   createdAt     DateTime @default(now())
 }
 
+model ScraperTarget {
+  id        String   @id @default(uuid())
+  name      String
+  type      String   // "STATE", "DISTRICT"
+  state     String?  @default("Odisha") // Legacy field
+  
+  regionStateId    String?
+  regionState      RegionState?    @relation(fields: [regionStateId], references: [id], onDelete: Cascade)
+  regionDistrictId String?
+  regionDistrict   RegionDistrict? @relation(fields: [regionDistrictId], references: [id], onDelete: Cascade)
+
+  url       String
+  isActive  Boolean  @default(true)
+  isVerified Boolean @default(false)
+  cronSchedule String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RegionState {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  districts RegionDistrict[]
+  targets   ScraperTarget[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RegionDistrict {
+  id        String   @id @default(uuid())
+  name      String
+  stateId   String
+  state     RegionState @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  targets   ScraperTarget[]
+  
+  @@unique([name, stateId])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model PriorityKeyword {
   id        String   @id @default(uuid())
   word      String   @unique

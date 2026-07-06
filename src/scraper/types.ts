@@ -23,3 +23,23 @@ export interface ScrapeResult {
   newTendersCount?: number;
   error?: string;
 }
+
+export type ScrapeStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'STOPPED' | 'FAILED' | 'SUCCESS';
+
+export interface ScrapeInstance {
+  id: string;
+  targetId: string;
+  targetName: string;
+  targetType: string;
+  sourceUrl: string;
+  status: ScrapeStatus;
+  source: string;
+  progress: {
+    page: number;
+    tendersFound: number;
+    newTendersAdded: number;
+  };
+  startTime: Date;
+  endTime?: Date;
+  error?: string;
+}

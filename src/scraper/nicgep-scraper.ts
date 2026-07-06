@@ -1,7 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { PrismaService } from "../prisma/prisma.service";
-import { ScrapeResult, TenderSchema } from "./types";
+import { ScrapeResult, ScrapeStatus, TenderSchema } from "./types";
 import { randomDelay } from "./queue";
 
 const USER_AGENT =
@@ -11,23 +11,30 @@ const STATE_URL =
 
 export async function scrapeStateTenders(
   prisma: PrismaService,
+  target: { name: string; url: string },
   source: string = "AUTO",
-  isPaused: () => boolean = () => false
+  getStatus: () => ScrapeStatus = () => 'RUNNING',
+  onProgress?: (found: number, added: number) => void
 ): Promise<ScrapeResult> {
-  const targetRegion = "State Level"; // Logical district name for logging
+  const targetRegion = target.name;
   let newTendersCount = 0;
+  
+  // Extract base domain (e.g. https://tendersodisha.gov.in)
+  const baseUrlMatch = target.url.match(/^(https?:\/\/[^\/]+)/);
+  const baseUrl = baseUrlMatch ? baseUrlMatch[1] : target.url.split('/nicgep')[0];
+
   try {
-    console.log("[NICGEP] Fetching homepage to initialize session...");
-    const sessionRes = await axios.get("https://tendersodisha.gov.in/nicgep/app", {
+    console.log(`[NICGEP] Fetching homepage to initialize session for ${target.name}...`);
+    const sessionRes = await axios.get(`${baseUrl}/nicgep/app`, {
       headers: { "User-Agent": USER_AGENT },
     });
 
     const cookies = sessionRes.headers["set-cookie"];
     const cookieStr = cookies ? cookies.map((c: string) => c.split(";")[0]).join("; ") : "";
 
-    console.log("[NICGEP] Fetching organisation tenders table...");
+    console.log(`[NICGEP] Fetching organisation tenders table for ${target.name}...`);
     const tenderRes = await axios.get(
-      "https://tendersodisha.gov.in/nicgep/app?component=%24DirectLink&page=FrontEndTendersByOrganisation&service=direct&session=T&sp",
+      `${baseUrl}/nicgep/app?component=%24DirectLink&page=FrontEndTendersByOrganisation&service=direct&session=T&sp`,
       {
         headers: {
           "User-Agent": USER_AGENT,
@@ -48,10 +55,18 @@ export async function scrapeStateTenders(
     const allValidTenders: any[] = [];
 
     for (let i = 0; i < rows.length; i++) {
-      if (isPaused()) {
-        console.log("[NICGEP] Scraper paused/stopped.");
+      let currentStatus = getStatus();
+      if (currentStatus === 'STOPPED') {
+        console.log("[NICGEP] Scraper stopped.");
         break;
       }
+      while (currentStatus === 'PAUSED') {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        currentStatus = getStatus();
+        if (currentStatus === 'STOPPED') break;
+      }
+      if (currentStatus === 'STOPPED') break;
+      
       const row = rows[i];
       const tds = $(row).find("td");
       if (tds.length < 6) continue;
@@ -70,8 +85,8 @@ export async function scrapeStateTenders(
       const detailUrl = href
         ? href.startsWith("http")
           ? href.replace(/&amp;/g, "&")
-          : "https://tendersodisha.gov.in" + href.replace(/&amp;/g, "&")
-        : STATE_URL + "&fallback=" + i;
+          : baseUrl + href.replace(/&amp;/g, "&")
+        : `${baseUrl}/nicgep/app?page=FrontEndTendersByOrganisation&service=page` + "&fallback=" + i;
 
       // Optimization: Check DB first using unique sourceUrl
       const existing = await prisma.tender.findUnique({
@@ -204,9 +219,12 @@ export async function scrapeStateTenders(
             },
           });
           newTendersCount++;
+          if (onProgress) onProgress(1, 1);
         } catch (dbError) {
           console.error(`[DB Error NICGEP]`, dbError);
         }
+      } else {
+         if (onProgress && validData) onProgress(1, 0);
       }
     }
 

@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { redactTenderBasedOnPlan } from "../common/utils/content-gating.util";
+import { CreateTenderDto } from "./dto/create-tender.dto";
+import { UpdateTenderDto } from "./dto/update-tender.dto";
 
 @Injectable()
 export class TendersService {
@@ -164,6 +166,21 @@ export class TendersService {
     return this.prisma.tender.update({
       where: { id },
       data: { aiProcessed: false, aiError: null },
+    });
+  }
+
+  async createTender(dto: CreateTenderDto) {
+    const data = {
+      ...dto,
+      sourceUrl: dto.sourceUrl || `manual-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+    };
+    return this.prisma.tender.create({ data });
+  }
+
+  async updateTender(id: string, dto: UpdateTenderDto) {
+    return this.prisma.tender.update({
+      where: { id },
+      data: dto,
     });
   }
 }

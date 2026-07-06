@@ -88,20 +88,29 @@ export function parseTenderPage(html: string, district: string, sourceUrl: strin
 
       // Find Document links in the row
       const links: string[] = [];
+      const allLinks: string[] = [];
       const validExtensions = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z"];
       $(row)
         .find("a")
         .each((_, a) => {
           const href = $(a).attr("href");
-          if (href && validExtensions.some((ext) => href.toLowerCase().endsWith(ext))) {
+          if (href) {
             try {
               const absoluteUrl = new URL(href, sourceUrl).toString();
-              links.push(absoluteUrl);
+              allLinks.push(absoluteUrl);
+              if (validExtensions.some((ext) => href.toLowerCase().split('?')[0].endsWith(ext))) {
+                links.push(absoluteUrl);
+              }
             } catch (e) {
               // invalid url
             }
           }
         });
+        
+      // Fallback: If no explicit PDF/DOC link is found, but the row has a link (like a "View" button for S3WaaS), use it.
+      if (links.length === 0 && allLinks.length > 0) {
+        links.push(...allLinks);
+      }
 
       let noticePdfUrl: string | null = null;
       let tenderPdfUrl: string | null = null;

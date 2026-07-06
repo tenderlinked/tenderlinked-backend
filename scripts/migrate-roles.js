@@ -7,7 +7,7 @@ async function runMigration() {
   // 1. Create System Roles
   const roles = [
     { name: 'Workspace Owner', description: 'Absolute full access', permissions: ['*'], isSystemRole: true },
-    { name: 'Admin', description: 'Can manage all resources except billing and workspace deletion', permissions: ['tenders:read', 'tenders:export', 'users:read', 'users:manage', 'settings:manage'], isSystemRole: true },
+    { name: 'Admin', description: 'Can manage all resources except billing and workspace deletion', permissions: ['tenders:read', 'tenders:write', 'tenders:export', 'users:read', 'users:manage', 'settings:manage'], isSystemRole: true },
     { name: 'Member', description: 'Standard access', permissions: ['tenders:read', 'tenders:export', 'users:read'], isSystemRole: true },
   ];
 
@@ -18,7 +18,8 @@ async function runMigration() {
       createdRoles[r.name] = await prisma.role.create({ data: r });
       console.log(`Created system role: ${r.name}`);
     } else {
-      createdRoles[r.name] = existing;
+      createdRoles[r.name] = await prisma.role.update({ where: { id: existing.id }, data: { permissions: r.permissions } });
+      console.log(`Updated system role: ${r.name}`);
     }
   }
 

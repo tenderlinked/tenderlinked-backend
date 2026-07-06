@@ -1,16 +1,18 @@
 import {
   Controller,
   Post,
+  Get,
   Req,
   Body,
+  Param,
   BadRequestException,
   HttpCode,
   UseGuards,
 } from "@nestjs/common";
+import { ScrapeStatus } from "./types";
 import type { Request } from "express";
 import { ApiTags, ApiOperation, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { ScraperService } from "./scraper.service";
-import { DISTRICTS } from "./districts";
 import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 
@@ -26,69 +28,62 @@ export class ScraperController {
   @ApiBearerAuth("cron-secret")
   @UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
-  @ApiBody({ schema: { properties: { district: { type: "string", description: "Optional district name or 'state'" } } } })
+  @ApiBody({ schema: { properties: { targetIds: { type: "array", items: { type: "string" }, description: "Optional array of target IDs" } } } })
   async scrape(
     @Req() req: Request,
-    @Body() body: { district?: string } = {}
+    @Body() body: { targetIds?: string[] } = {}
   ) {
     const authHeader = req.headers["authorization"];
     const cronSecret = process.env.CRON_SECRET;
     const isCronJob = !!(cronSecret && authHeader === `Bearer ${cronSecret}`);
     const source = isCronJob ? "AUTO" : "MANUAL";
 
-    let targetDistrict: string | null = null;
-
-    if (body?.district) {
-      if (body.district.toLowerCase() === "state") {
-        targetDistrict = "state";
-      } else if (!DISTRICTS.includes(body.district.toLowerCase())) {
-        throw new BadRequestException(
-          `Invalid district name. Allowed values: ${DISTRICTS.join(", ")}`
-        );
-      } else {
-        targetDistrict = body.district.toLowerCase();
-      }
-    }
-
-    if (targetDistrict === "state") {
-      const result = await this.scraperService.scrapeStateTenders(source);
+    if (body?.targetIds && body.targetIds.length > 0) {
+      const result = await this.scraperService.scrapeSpecificTargets(body.targetIds, source);
       return {
-        success: result.success,
-        districtsProcessed: 1,
-        newTenders: result.newTendersCount || 0,
-        details: [result],
-      };
-    } else if (targetDistrict) {
-      const result = await this.scraperService.scrapeDistrict(targetDistrict, source);
-      return {
-        success: result.success,
-        districtsProcessed: 1,
-        newTenders: result.newTendersCount || 0,
-        details: [result],
+        success: true,
+        message: "Scraper started in background",
+        districtsProcessed: result.districtsProcessed,
       };
     } else {
       const result = await this.scraperService.runFullScrape(source);
-      const newTenders = result.results.reduce(
-        (acc, curr) => acc + (curr.newTendersCount || 0),
-        0
-      );
       return {
         success: true,
+        message: "Scraper started in background",
         districtsProcessed: result.districtsProcessed,
-        newTenders,
-        details: result.results,
       };
     }
   }
 
   @Post("stop")
   @HttpCode(200)
-  @ApiOperation({ summary: "Stop current scrape operation" })
+  @ApiOperation({ summary: "Stop all current scrape operations" })
   @ApiBearerAuth("cron-secret")
   @UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
   async stopScrape(@Req() req: Request) {
     this.scraperService.stopScrape();
-    return { success: true, message: "Scraping stopped" };
+    return { success: true, message: "All scraping stopped" };
+  }
+
+  @Get("instances")
+  @ApiOperation({ summary: "Get all active scraper instances" })
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions("tenders:scrape")
+  async getInstances() {
+    return await this.scraperService.getInstances();
+  }
+
+  @Post("instances/:id/status")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Update status of a specific instance" })
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions("tenders:scrape")
+  async updateInstanceStatus(
+    @Param("id") id: string,
+    @Body() body: { status: ScrapeStatus }
+  ) {
+    this.scraperService.updateInstanceStatus(id, body.status);
+    return { success: true };
   }
 }

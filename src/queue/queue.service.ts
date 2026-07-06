@@ -42,7 +42,9 @@ export class QueueService {
 
       try {
         let details: ExtractedTenderDetails | null = null;
-        if (targetPdf) {
+        if (tender.level === "STATE") {
+          details = await extractTenderDetailsFromText(tender.title, tender.description || "");
+        } else if (targetPdf) {
           details = await extractTenderDetailsFromPdf(targetPdf);
         } else if (tender.title) {
           details = await extractTenderDetailsFromText(tender.title, tender.description || "");
@@ -54,10 +56,13 @@ export class QueueService {
             tags: details.tags,
             aiProcessed: true,
             aiError: null,
-            tenderValue: details.tenderValue,
-            emd: details.emd,
-            applicationCost: details.applicationCost,
           };
+          
+          // Only overwrite financial details if the AI specifically extracted them, 
+          // otherwise preserve what the HTML scraper already found.
+          if (details.tenderValue) updateData.tenderValue = details.tenderValue;
+          if (details.emd) updateData.emd = details.emd;
+          if (details.applicationCost) updateData.applicationCost = details.applicationCost;
 
           if (details.bidOpeningDate) {
             const prefix = tender.description ? `${tender.description} | ` : "";

@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
   Query,
@@ -14,6 +15,8 @@ import { TendersService } from "./tenders.service";
 import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 import { UseGuards } from "@nestjs/common";
+import { CreateTenderDto } from "./dto/create-tender.dto";
+import { UpdateTenderDto } from "./dto/update-tender.dto";
 
 @ApiTags("Tenders")
 @ApiBearerAuth()
@@ -159,6 +162,43 @@ export class TendersController {
     } catch (error) {
       console.error("[PATCH /tenders/:id/retry-ai] Error:", error);
       throw new InternalServerErrorException("Internal Server Error");
+    }
+  }
+
+  // -------------------------------------------------
+  //  CREATE – only users with `tenders:write`
+  // -------------------------------------------------
+  @Post()
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:write')
+  @ApiOperation({ summary: 'Create a new Tender (Super‑Admin or tenant member granted permission)' })
+  @ApiBody({ type: CreateTenderDto })
+  async create(@Body() dto: CreateTenderDto) {
+    try {
+      return await this.tendersService.createTender(dto);
+    } catch (e) {
+      console.error('[POST /tenders] Error:', e);
+      throw new InternalServerErrorException('Failed to create tender');
+    }
+  }
+
+  // -------------------------------------------------
+  //  UPDATE – only users with `tenders:write`
+  // -------------------------------------------------
+  @Patch(':id')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:write')
+  @ApiOperation({ summary: 'Update an existing Tender (Super‑Admin or tenant member granted permission)' })
+  @ApiBody({ type: UpdateTenderDto })
+  async update(@Param('id') id: string, @Body() dto: UpdateTenderDto) {
+    if (Object.keys(dto).length === 0) {
+      throw new BadRequestException('No fields provided for update');
+    }
+    try {
+      return await this.tendersService.updateTender(id, dto);
+    } catch (e) {
+      console.error('[PATCH /tenders/:id] Error:', e);
+      throw new InternalServerErrorException('Failed to update tender');
     }
   }
 }

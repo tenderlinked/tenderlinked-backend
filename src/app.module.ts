@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { ScheduleModule } from "@nestjs/schedule";
 import { PrismaModule } from "./prisma/prisma.module";
 import { HealthModule } from "./health/health.module";
 import { TendersModule } from "./tenders/tenders.module";
@@ -19,11 +20,14 @@ import { RolesModule } from './roles/roles.module';
 import { PlansModule } from './plans/plans.module';
 import { CreditsModule } from './credits/credits.module';
 import { AuthModule } from './auth/auth.module';
+import { RegionsModule } from './regions/regions.module';
 
 @Module({
   imports: [
     // Load .env variables
     ConfigModule.forRoot({ isGlobal: true }),
+    // Enable cron/schedule globally
+    ScheduleModule.forRoot(),
     // Global Prisma
     PrismaModule,
     // Feature modules
@@ -45,6 +49,7 @@ import { AuthModule } from './auth/auth.module';
     PlansModule,
     CreditsModule,
     AuthModule,
+    RegionsModule,
   ],
 })
 export class AppModule {}

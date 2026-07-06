@@ -1,6 +1,5 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { DISTRICTS } from "../scraper/districts";
 
 @Injectable()
 export class CronService {
@@ -37,10 +36,12 @@ export class CronService {
       }
     }
 
+    const targets = await this.prisma.scraperTarget.findMany({ where: { isActive: true } });
+
     return {
       success: true,
       shouldRun: true,
-      districts: DISTRICTS,
+      targets,
     };
   }
 }

@@ -91,6 +91,7 @@ export class UsersService {
     let member = await this.prisma.tenantMember.findFirst({
       where: { userId },
       include: { 
+        customRole: true,
         tenant: {
           include: { subscription: true }
         }
@@ -125,6 +126,7 @@ export class UsersService {
       member = await this.prisma.tenantMember.findFirst({
         where: { userId },
         include: { 
+          customRole: true,
           tenant: {
             include: { subscription: true }
           }
@@ -135,6 +137,7 @@ export class UsersService {
     return {
       ...profile,
       tenant: member?.tenant || null,
+      permissions: member?.customRole?.permissions || (member?.role === 'OWNER' ? ['*'] : []),
     };
   }
 

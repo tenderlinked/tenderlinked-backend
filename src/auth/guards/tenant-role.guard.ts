@@ -82,7 +82,7 @@ export class TenantRoleGuard implements CanActivate {
         throw new ForbiddenException('This workspace has been suspended. Please contact support.');
       }
       
-      return this.checkPermissions(context, member);
+      return this.checkPermissions(context, member, member.tenantId);
     }
 
     const actualTenantId = tenantIdOrSubdomain;
@@ -103,12 +103,12 @@ export class TenantRoleGuard implements CanActivate {
       throw new ForbiddenException('This workspace has been suspended. Please contact support.');
     }
 
-    return this.checkPermissions(context, member);
+    return this.checkPermissions(context, member, actualTenantId);
   }
 
-  private checkPermissions(context: ExecutionContext, member: any): boolean {
-    // Workspace owner has full access (and bypasses granular permissions)
-    if (member.isOwner) return true;
+  private checkPermissions(context: ExecutionContext, member: any, actualTenantId?: string): boolean {
+    // Workspace owner has full access only within their own tenant
+    if (member.role === 'OWNER' && actualTenantId && member.tenant?.id === actualTenantId) return true;
 
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
       context.getHandler(),

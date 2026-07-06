@@ -25,6 +25,20 @@ export class RolesController {
     return this.rolesService.createSystemRole(body);
   }
 
+  @Post('system/bulk-delete')
+  @ApiOperation({ summary: "Bulk delete system roles (Super Admin only)" })
+  @UseGuards(SuperAdminGuard)
+  async bulkDeleteSystemRoles(@Body() body: { ids: string[] }) {
+    try {
+      return await this.rolesService.bulkDeleteSystemRoles(body.ids);
+    } catch (e: any) {
+      if (e.message.includes("assigned")) {
+        throw new Error("Cannot delete roles: one or more are assigned to users.");
+      }
+      throw e;
+    }
+  }
+
   @Put('system/:roleId')
   @ApiOperation({ summary: "Update a system role (Super Admin only)" })
   @UseGuards(SuperAdminGuard)

@@ -69,6 +69,24 @@ export class RolesService {
     });
   }
 
+  async bulkDeleteSystemRoles(roleIds: string[]) {
+    // Check if any role is in use
+    const membersWithRole = await this.prisma.tenantMember.count({
+      where: { roleId: { in: roleIds } }
+    });
+    
+    if (membersWithRole > 0) {
+      throw new Error("Cannot delete system roles: one or more roles are currently assigned to users.");
+    }
+    
+    return this.prisma.role.deleteMany({
+      where: { 
+        id: { in: roleIds },
+        isSystemRole: true
+      }
+    });
+  }
+
   async getTenantRoles(tenantId: string) {
     return this.prisma.role.findMany({
       where: {

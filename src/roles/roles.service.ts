@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -61,7 +61,7 @@ export class RolesService {
     });
     
     if (membersWithRole > 0) {
-      throw new Error("Cannot delete system role that is currently assigned to users.");
+      throw new BadRequestException("Cannot delete system role that is currently assigned to users.");
     }
     
     return this.prisma.role.delete({
@@ -76,7 +76,7 @@ export class RolesService {
     });
     
     if (membersWithRole > 0) {
-      throw new Error("Cannot delete system roles: one or more roles are currently assigned to users.");
+      throw new BadRequestException("Cannot delete system roles: one or more roles are currently assigned to users.");
     }
     
     return this.prisma.role.deleteMany({
@@ -141,7 +141,7 @@ export class RolesService {
     });
     
     if (membersWithRole > 0) {
-      throw new Error("Cannot delete role that is currently assigned to members.");
+      throw new BadRequestException("Cannot delete role that is currently assigned to members.");
     }
     
     return this.prisma.role.delete({

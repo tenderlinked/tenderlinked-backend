@@ -28,7 +28,7 @@ export class TenantsService {
     }));
   }
 
-  async addMember(tenantId: string, email: string, roleId?: string) {
+  async addMember(tenantId: string, email: string, roleId?: string, password?: string, firstName?: string, lastName?: string) {
     let profile = await this.prisma.userProfile.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } }
     });
@@ -39,7 +39,7 @@ export class TenantsService {
     if (!profile) {
       // 1. User doesn't exist, create them in Keycloak
       const tenantLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/login`;
-      const newUserId = await this.inviteUserToKeycloak(email, tenantLink, tenant.name);
+      const newUserId = await this.inviteUserToKeycloak(email, tenantLink, tenant.name, password, firstName, lastName);
       
       if (!newUserId) {
         throw new BadRequestException("Failed to create user in authentication provider.");
@@ -90,7 +90,7 @@ export class TenantsService {
     return pass;
   }
 
-  private async inviteUserToKeycloak(email: string, tenantLink: string, tenantName: string): Promise<string | null> {
+  private async inviteUserToKeycloak(email: string, tenantLink: string, tenantName: string, password?: string, firstName?: string, lastName?: string): Promise<string | null> {
     try {
       const issuer = process.env.KEYCLOAK_ISSUER || 'https://auth.enfycon.com/realms/enfycon-tender';
       const tokenUrl = `${issuer}/protocol/openid-connect/token`;
@@ -117,7 +117,10 @@ export class TenantsService {
       const realm = urlParts.pathname.split('/').pop();
       const adminBaseUrl = `${urlParts.origin}/admin/realms/${realm}/users`;
       
-      const tempPassword = this.generateRandomPassword();
+      const tempPassword = password || this.generateRandomPassword();
+
+      const emailPrefix = email.split('@')[0];
+      const defaultFirstName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
 
       const createRes = await fetch(adminBaseUrl, {
         method: 'POST',
@@ -128,12 +131,14 @@ export class TenantsService {
         body: JSON.stringify({
           username: email.toLowerCase(),
           email: email.toLowerCase(),
+          firstName: firstName || defaultFirstName,
+          lastName: lastName || tenantName || 'User',
           enabled: true,
           emailVerified: true,
           credentials: [{
             type: 'password',
             value: tempPassword,
-            temporary: true
+            temporary: password ? false : true
           }]
         })
       });

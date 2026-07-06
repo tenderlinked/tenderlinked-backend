@@ -25,8 +25,8 @@ export class TenantsController {
   @ApiOperation({ summary: "Add a member to a tenant workspace" })
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('members:manage')
-  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, roleId?: string }) {
-    return this.tenantsService.addMember(tenantId, body.email, body.roleId);
+  async addMember(@Param('tenantId') tenantId: string, @Body() body: { email: string, roleId?: string, password?: string, firstName?: string, lastName?: string }) {
+    return this.tenantsService.addMember(tenantId, body.email, body.roleId, body.password, body.firstName, body.lastName);
   }
 
   @Patch(':tenantId/members/:userId')

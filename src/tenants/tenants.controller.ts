@@ -49,22 +49,15 @@ export class TenantsController {
     return this.tenantsService.removeMember(tenantId, userId);
   }
 
-  @Post(':tenantId/subdomain')
-  @ApiOperation({ summary: "Update the subdomain for a tenant" })
+  @Post(':tenantId/alert-preferences')
+  @ApiOperation({ summary: "Save email alert preferences for a tenant" })
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('settings:manage')
-  async updateSubdomain(@Param('tenantId') tenantId: string, @Body() body: { subdomain: string }) {
-    return this.tenantsService.updateSubdomain(tenantId, body.subdomain);
-  }
-
-  @Post('by-subdomain/:subdomain/alert-preferences')
-  @ApiOperation({ summary: "Save email alert preferences for a tenant by subdomain" })
-  // Public endpoint for the onboarding step right after registration
   async saveAlertPreferences(
-    @Param('subdomain') subdomain: string, 
+    @Param('tenantId') tenantId: string, 
     @Body() body: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }
   ) {
-    return this.tenantsService.saveAlertPreferencesBySubdomain(subdomain, body);
+    return this.tenantsService.saveAlertPreferencesByTenantId(tenantId, body);
   }
 
   // ---- Super Admin Routes (Should use a SuperAdmin guard ideally) ----

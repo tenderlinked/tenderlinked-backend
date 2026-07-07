@@ -36,8 +36,7 @@ export class PaymentsService {
 
       const tenant = await this.prisma.tenant.create({
         data: {
-          name: `Workspace_${userId.substring(0, 5)}`,
-          subdomain: `sub_${userId.substring(0, 5)}_${Date.now()}`
+          name: `Workspace_${userId.substring(0, 5)}`
         }
       });
       

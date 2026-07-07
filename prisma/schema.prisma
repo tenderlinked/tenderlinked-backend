@@ -27,7 +27,6 @@ enum TenantRole {
 model Tenant {
   id              String   @id @default(uuid())
   name            String
-  subdomain       String   @unique
   
   members         TenantMember[]
   subscription    TenantSubscription?

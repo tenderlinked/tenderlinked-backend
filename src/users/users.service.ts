@@ -22,20 +22,9 @@ export class UsersService {
       // 2. Create a default Tenant for the user based on their company name or ID
       const tenantName = companyName || `Workspace_${userId.substring(0, 5)}`;
       
-      let uniqueSubdomain = username;
-      if (!uniqueSubdomain) {
-        // Generate a 6-character random alphanumeric subdomain fallback
-        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        uniqueSubdomain = '';
-        for (let i = 0; i < 6; i++) {
-            uniqueSubdomain += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-      }
-
       const tenant = await this.prisma.tenant.create({
         data: {
           name: tenantName,
-          subdomain: uniqueSubdomain,
         },
       });
 
@@ -54,7 +43,10 @@ export class UsersService {
         },
       });
 
-      return profile;
+      return {
+        ...profile,
+        tenantId: tenant.id
+      };
     } catch (error) {
       console.error('Error creating user profile & tenant:', error);
       throw new InternalServerErrorException('Failed to create user profile');
@@ -107,14 +99,8 @@ export class UsersService {
       } else if (!member) {
         // User has a profile but no tenant, let's create a default tenant for them
         const tenantName = `Workspace_${userId.substring(0, 5)}`;
-        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        let uniqueSubdomain = '';
-        for (let i = 0; i < 6; i++) {
-            uniqueSubdomain += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-
         const tenant = await this.prisma.tenant.create({
-          data: { name: tenantName, subdomain: uniqueSubdomain },
+          data: { name: tenantName },
         });
 
         await this.prisma.tenantMember.create({

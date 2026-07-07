@@ -10,15 +10,11 @@ export class TenantRoleGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     
-    // --- Subdomain to UUID Resolution ---
-    // Resolve subdomain to UUID early so controllers always get a UUID in request.params
     let tenantIdOrSubdomain = request.params?.tenantId || request.body?.tenantId || request.headers['x-tenant-id'];
+    
+    // We only accept valid UUIDs for tenantId now
     if (tenantIdOrSubdomain && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantIdOrSubdomain)) {
-      const tenant = await this.prisma.tenant.findUnique({ where: { subdomain: tenantIdOrSubdomain } });
-      if (!tenant) throw new ForbiddenException('Tenant not found');
-      tenantIdOrSubdomain = tenant.id;
-      if (request.params?.tenantId) request.params.tenantId = tenant.id;
-      if (request.body?.tenantId) request.body.tenantId = tenant.id;
+      throw new ForbiddenException('Invalid Tenant ID format');
     }
 
     let authUserId: string | null = null;

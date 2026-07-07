@@ -248,27 +248,7 @@ export class TenantsService {
     });
   }
 
-  async updateSubdomain(tenantId: string, newSubdomain: string) {
-    const cleanSubdomain = newSubdomain.toLowerCase().replace(/[^a-z0-9-]/g, '');
-    
-    if (cleanSubdomain.length < 3) {
-      throw new BadRequestException("Subdomain must be at least 3 characters");
-    }
 
-    // Check if taken
-    const existing = await this.prisma.tenant.findUnique({
-      where: { subdomain: cleanSubdomain }
-    });
-    
-    if (existing && existing.id !== tenantId) {
-      throw new BadRequestException("This subdomain is already taken.");
-    }
-
-    return this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: { subdomain: cleanSubdomain }
-    });
-  }
 
   // ---- Super Admin Actions ----
 
@@ -413,9 +393,9 @@ export class TenantsService {
   }
 
   // ---- Alert Preferences ----
-  async saveAlertPreferencesBySubdomain(subdomain: string, data: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }) {
+  async saveAlertPreferencesByTenantId(tenantId: string, data: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }) {
     const tenant = await this.prisma.tenant.findUnique({
-      where: { subdomain }
+      where: { id: tenantId }
     });
 
     if (!tenant) {

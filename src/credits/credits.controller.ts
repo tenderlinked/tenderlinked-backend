@@ -7,7 +7,7 @@ import { UseGuards } from '@nestjs/common';
 
 @ApiTags('Credits')
 @ApiBearerAuth()
-@Controller('api')
+@Controller()
 @UseGuards(TenantRoleGuard)
 export class CreditsController {
   constructor(private readonly creditsService: CreditsService) {}

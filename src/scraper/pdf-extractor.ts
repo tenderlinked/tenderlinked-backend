@@ -36,7 +36,9 @@ function rotateApiKey() {
   }
 }
 
-export async function extractTenderDetailsFromPdf(pdfUrl: string): Promise<ExtractedTenderDetails | null> {
+import * as fs from 'fs';
+
+export async function extractTenderDetailsFromPdf(localPdfPath: string): Promise<ExtractedTenderDetails | null> {
   let apiKey = getNextApiKey();
   if (!apiKey) {
     console.warn("[PDF Extractor] No GEMINI_API_KEY provided. Skipping extraction.");
@@ -44,33 +46,28 @@ export async function extractTenderDetailsFromPdf(pdfUrl: string): Promise<Extra
   }
 
   try {
-    // 0. Check if URL is a PDF
-    if (!pdfUrl.toLowerCase().split("?")[0].endsWith(".pdf")) {
-      console.warn(`[PDF Extractor] URL is not a PDF: ${pdfUrl}. Skipping AI extraction.`);
+    // 0. Check if it's a pdf extension string
+    if (!localPdfPath.toLowerCase().split("?")[0].endsWith(".pdf")) {
+      console.warn(`[PDF Extractor] Not a PDF: ${localPdfPath}. Skipping AI extraction.`);
       return {
         tenderValue: null,
         emd: null,
         applicationCost: null,
-        aiSummary: "Non-PDF document attached. Please download to view.",
+        aiSummary: "Non-PDF document attached. Please view online.",
         tags: [],
         rawText: null,
       };
     }
 
-    let ai = new GoogleGenAI({ apiKey });
+    // 1. Read the PDF from local disk
+    if (!fs.existsSync(localPdfPath)) {
+      console.warn(`[PDF Extractor] Local file not found: ${localPdfPath}. Skipping AI extraction.`);
+      return null;
+    }
+    
+    const buffer = fs.readFileSync(localPdfPath);
 
-    // 1. Download the PDF
-    const response = await axios.get(pdfUrl, {
-      responseType: "arraybuffer",
-      timeout: 30000,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "application/pdf",
-      },
-    });
 
-    const buffer = Buffer.from(response.data);
 
     // 1.5 Extract Raw Text using pdf2json
     let rawTextFromPdf: string | null = null;
@@ -135,8 +132,9 @@ export async function extractTenderDetailsFromPdf(pdfUrl: string): Promise<Extra
 
     while (attempts < maxAttempts && !success) {
       try {
-        const result = await ai.models.generateContent({
-          model: "gemini-2.0-flash-lite",
+        let currentAi = new GoogleGenAI({ apiKey: getNextApiKey() as string });
+        const result = await currentAi.models.generateContent({
+          model: "gemini-3.1-flash-lite",
           contents: [
             prompt,
             { inlineData: { mimeType: "application/pdf", data: pdfBase64 } },
@@ -162,8 +160,6 @@ export async function extractTenderDetailsFromPdf(pdfUrl: string): Promise<Extra
 
         if (aiError?.status === 429 || aiError?.status === 503) {
           rotateApiKey();
-          apiKey = getNextApiKey()!;
-          ai = new GoogleGenAI({ apiKey });
           attempts++;
         } else {
           break;
@@ -243,7 +239,7 @@ export async function extractTenderDetailsFromPdf(pdfUrl: string): Promise<Extra
       return null;
     }
   } catch (error) {
-    console.error(`[PDF Extractor] Error processing ${pdfUrl}:`, error);
+    console.error(`[PDF Extractor] Error processing ${localPdfPath}:`, error);
     return null;
   }
 }
@@ -258,8 +254,6 @@ export async function extractTenderDetailsFromText(
   }
 
   try {
-    let ai = new GoogleGenAI({ apiKey });
-
     const responseSchema: Schema = {
       type: Type.OBJECT,
       properties: {
@@ -300,8 +294,10 @@ export async function extractTenderDetailsFromText(
 
     while (attempts < maxAttempts && !success) {
       try {
-        const result = await ai.models.generateContent({
-          model: "gemini-2.0-flash-lite",
+        let currentAi = new GoogleGenAI({ apiKey: getNextApiKey() as string });
+
+        const result = await currentAi.models.generateContent({
+          model: "gemini-3.1-flash-lite",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -323,8 +319,6 @@ export async function extractTenderDetailsFromText(
 
         if (aiError?.status === 429 || aiError?.status === 503) {
           rotateApiKey();
-          apiKey = getNextApiKey()!;
-          ai = new GoogleGenAI({ apiKey });
           attempts++;
         } else {
           throw aiError;

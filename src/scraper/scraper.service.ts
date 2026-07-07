@@ -8,6 +8,9 @@ import { ScrapeResult, TenderSchema, ScrapeInstance, ScrapeStatus } from "./type
 import { scrapeStateTenders } from "./nicgep-scraper";
 import { v4 as uuidv4 } from 'uuid';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { SessionService } from "./session.service";
+import * as fs from 'fs';
+import * as path from 'path';
 const cronParser = require('cron-parser');
 
 const DEFAULT_TIMEOUT = 30000;
@@ -16,9 +19,18 @@ const USER_AGENT =
 
 @Injectable()
 export class ScraperService {
-  public activeInstances = new Map<string, ScrapeInstance>();
+  private activeInstances = new Map<string, ScrapeInstance>();
+  private readonly CACHE_DIR = path.join(process.cwd(), "scraper_cache");
+  private readonly CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sessionService: SessionService
+  ) {
+    if (!fs.existsSync(this.CACHE_DIR)) {
+      fs.mkdirSync(this.CACHE_DIR, { recursive: true });
+    }
+  }
 
   stopScrape() {
     for (const [id, instance] of this.activeInstances.entries()) {
@@ -322,7 +334,7 @@ export class ScraperService {
            }
         };
 
-        const result = await scrapeStateTenders(this.prisma, target, source, getStatus, onProgress);
+        const result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         
         const current = this.activeInstances.get(instance.id);
         if (current) {
@@ -427,7 +439,7 @@ export class ScraperService {
            }
         };
 
-        const result = await scrapeStateTenders(this.prisma, target, source, getStatus, onProgress);
+        const result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         
         const current = this.activeInstances.get(instance.id);
         if (current) {

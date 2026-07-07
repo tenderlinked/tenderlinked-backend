@@ -33,7 +33,7 @@ export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], is
   // Document fields are gated behind credits if they aren't explicitly allowed by the plan
   // If explicitly allowed by plan, no credit needed. If not allowed, they need a credit unlock.
   for (const field of documentFields) {
-    if (redactedTender[field] && !allowedFields.includes(field) && !isUnlockedWithCredit) {
+    if (!allowedFields.includes(field) && !isUnlockedWithCredit) {
       redactedTender[field] = CREDIT_REDACTED_PLACEHOLDER;
     }
   }

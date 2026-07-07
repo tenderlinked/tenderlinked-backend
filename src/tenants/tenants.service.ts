@@ -286,13 +286,24 @@ export class TenantsService {
   }
 
   async updateTenantSubscription(tenantId: string, planType: string, status: string) {
+    // 1. Fetch the requested plan to get the monthlyCredits
+    const plan = await this.prisma.pricingPlan.findUnique({
+      where: { name: planType }
+    });
+    const monthlyCredits = plan ? plan.monthlyCredits : 0;
+
     return this.prisma.tenantSubscription.upsert({
       where: { tenantId },
-      update: { planType, status },
+      update: { 
+        planType, 
+        status,
+        availableCredits: monthlyCredits // Reset credits on plan change
+      },
       create: {
         tenantId,
         planType,
         status,
+        availableCredits: monthlyCredits,
         paymentMethod: 'MANUAL',
         paymentId: 'MANUAL_' + Date.now(),
         startDate: new Date(),

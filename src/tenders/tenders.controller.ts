@@ -41,6 +41,7 @@ export class TendersController {
   @ApiQuery({ name: "dateRange", required: false, description: "Filter by date range (this_week)" })
   @ApiQuery({ name: "includeStats", required: false, description: "Include stats in metadata (true)" })
   @ApiQuery({ name: "tenderType", required: false, description: "Type of tender (state/district)" })
+  @ApiQuery({ name: "state", required: false, description: "Filter by state" })
   async getTenders(
     @Query("district") district?: string,
     @Query("search") search?: string,
@@ -55,6 +56,7 @@ export class TendersController {
     @Query("dateRange") dateRange?: string,
     @Query("includeStats") includeStats?: string,
     @Query("tenderType") tenderType?: string,
+    @Query("state") state?: string,
     @Req() req?: any
   ) {
     try {
@@ -86,9 +88,46 @@ export class TendersController {
         dateRange: dateRange || null,
         includeStats: includeStats || null,
         tenderType: tenderType || null,
+        state: state || null,
       });
     } catch (error: any) {
       console.error("[GET /tenders] Error:", error);
+      throw new InternalServerErrorException({
+        error: "Internal Server Error",
+        details: error?.message || String(error),
+      });
+    }
+  }
+
+  @Get(':id')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: "Get a specific tender by ID" })
+  async getTenderById(
+    @Param('id') id: string,
+    @Req() req?: any
+  ) {
+    try {
+      let userId: string | null = null;
+      const authHeader = req?.headers?.['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.split(' ')[1];
+          const payloadBase64 = token.split('.')[1];
+          const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+          userId = decodedPayload.sub;
+        } catch (e) {
+          // Ignore
+        }
+      }
+
+      const tender = await this.tendersService.getTenderById(id, userId);
+      if (!tender) {
+        throw new BadRequestException("Tender not found");
+      }
+      return { success: true, data: tender };
+    } catch (error: any) {
+      console.error(`[GET /tenders/${id}] Error:`, error);
       throw new InternalServerErrorException({
         error: "Internal Server Error",
         details: error?.message || String(error),

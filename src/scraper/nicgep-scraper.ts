@@ -1,8 +1,11 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
+import * as fs from "fs";
+import * as path from "path";
 import { PrismaService } from "../prisma/prisma.service";
 import { ScrapeResult, ScrapeStatus, TenderSchema } from "./types";
 import { randomDelay } from "./queue";
+import { SessionService } from "./session.service";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -11,6 +14,7 @@ const STATE_URL =
 
 export async function scrapeStateTenders(
   prisma: PrismaService,
+  sessionService: SessionService,
   target: { name: string; url: string },
   source: string = "AUTO",
   getStatus: () => ScrapeStatus = () => 'RUNNING',
@@ -24,13 +28,12 @@ export async function scrapeStateTenders(
   const baseUrl = baseUrlMatch ? baseUrlMatch[1] : target.url.split('/nicgep')[0];
 
   try {
-    console.log(`[NICGEP] Fetching homepage to initialize session for ${target.name}...`);
-    const sessionRes = await axios.get(`${baseUrl}/nicgep/app`, {
-      headers: { "User-Agent": USER_AGENT },
-    });
-
-    const cookies = sessionRes.headers["set-cookie"];
-    const cookieStr = cookies ? cookies.map((c: string) => c.split(";")[0]).join("; ") : "";
+    console.log(`[NICGEP] Fetching valid session for ${target.name} via SessionService...`);
+    const cookieStr = await sessionService.getValidSessionCookie();
+    
+    if (!cookieStr) {
+      console.warn(`[NICGEP] Warning: Could not obtain a valid session. Scraping may fail or be blocked by Captcha.`);
+    }
 
     console.log(`[NICGEP] Fetching organisation tenders table for ${target.name}...`);
     const tenderRes = await axios.get(
@@ -38,10 +41,13 @@ export async function scrapeStateTenders(
       {
         headers: {
           "User-Agent": USER_AGENT,
-          Cookie: cookieStr,
+          Cookie: cookieStr || "",
         },
       }
     );
+
+    // Save any newly returned load balancing / session cookies
+    sessionService.updateCookiesFromHeaders(tenderRes.headers['set-cookie']);
 
     const $ = cheerio.load(tenderRes.data);
     const rows = $("table#table tr.even, table#table tr.odd").toArray();
@@ -54,7 +60,8 @@ export async function scrapeStateTenders(
     console.log(`[NICGEP] Found ${rows.length} tenders. Processing...`);
     const allValidTenders: any[] = [];
 
-    for (let i = 0; i < rows.length; i++) {
+    const limitCount = source === "TEST" ? 10 : rows.length;
+    for (let i = 0; i < limitCount; i++) {
       let currentStatus = getStatus();
       if (currentStatus === 'STOPPED') {
         console.log("[NICGEP] Scraper stopped.");
@@ -88,13 +95,36 @@ export async function scrapeStateTenders(
           : baseUrl + href.replace(/&amp;/g, "&")
         : `${baseUrl}/nicgep/app?page=FrontEndTendersByOrganisation&service=page` + "&fallback=" + i;
 
-      // Optimization: Check DB first using unique sourceUrl
+      // Extract a stable Tender ID to prevent duplicates when sessions expire
+      const tenderIdMatch = cleanTitle.match(/\[([0-9]{4}_[A-Z0-9]+_[0-9]+_[0-9]+)\]/);
+      const tenderId = tenderIdMatch ? tenderIdMatch[1] : null;
+      const stableUrl = tenderId 
+        ? `${baseUrl}/tender/${tenderId}` 
+        : `${baseUrl}/tender/hash-${Buffer.from(cleanTitle).toString('base64').substring(0, 20)}`;
+
+      if (i > 0 && i % 100 === 0) {
+        console.log(`[NICGEP] Processed ${i}/${rows.length} tenders...`);
+      }
+
+      // Optimization: Check DB first using stable unique identifier
       const existing = await prisma.tender.findUnique({
-        where: { sourceUrl: detailUrl },
+        where: { sourceUrl: stableUrl },
       });
 
-      // If it exists AND has the deep scraped fields (emd), skip it
+      // If it exists AND has the deep scraped fields (emd), check if PDF is downloaded
       if (existing && existing.emd !== null) {
+        // Check if the PDF file already exists on disk
+        const pdfPath = path.join(process.cwd(), 'downloads', `tender_${existing.id}.pdf`);
+        if (!fs.existsSync(pdfPath) && href) {
+          // PDF not downloaded yet — use the FRESH detail URL from current session to download
+          console.log(`[NICGEP] Downloading missing PDF for existing tender ${existing.id}...`);
+          try {
+            await sessionService.downloadDocumentWithCaptcha(detailUrl, existing.id);
+          } catch (dlErr: any) {
+            console.error(`[NICGEP] PDF download failed for ${existing.id}:`, dlErr.message);
+          }
+        }
+        if (onProgress) onProgress(1, 0);
         continue;
       }
 
@@ -104,6 +134,9 @@ export async function scrapeStateTenders(
       let bidSubmissionStartDate: string | null = null;
       let bidSubmissionEndDate: string | null = null;
       let bidOpeningDate: string | null = null;
+      let workDescription: string | null = null;
+      let noticePdfUrl: string | null = null;
+      let tenderPdfUrl: string | null = null;
 
       if (href) {
         console.log(
@@ -111,9 +144,15 @@ export async function scrapeStateTenders(
         );
 
         try {
+          // Re-fetch the latest cookie string from SessionService (which now contains merged/updated cookies)
+          const activeCookieStr = await sessionService.getValidSessionCookie();
+
           const detailRes = await axios.get(detailUrl, {
-            headers: { "User-Agent": USER_AGENT, Cookie: cookieStr },
+            headers: { "User-Agent": USER_AGENT, Cookie: activeCookieStr || "" },
           });
+
+          // Save any newly returned load balancing / session cookies
+          sessionService.updateCookiesFromHeaders(detailRes.headers['set-cookie']);
 
           const $d = cheerio.load(detailRes.data);
           const data: Record<string, string> = {};
@@ -122,7 +161,11 @@ export async function scrapeStateTenders(
             const key = $d(el).text().replace(/\s+/g, " ").trim();
             const nextTd = $d(el).next("td");
             if (nextTd.length) {
-              data[key] = nextTd.text().replace(/\s+/g, " ").trim();
+              const val = nextTd.text().replace(/\s+/g, " ").trim();
+              data[key] = val;
+              if (key === "Work Description") {
+                workDescription = val;
+              }
             }
           });
 
@@ -132,6 +175,35 @@ export async function scrapeStateTenders(
           bidSubmissionStartDate = data["Bid Submission Start Date"] || null;
           bidSubmissionEndDate = data["Bid Submission End Date"] || null;
           bidOpeningDate = data["Bid Opening Date"] || null;
+
+          // Extract individual PDF URLs from the tables
+          $d("table a").each((i, el) => {
+            const linkHref = $d(el).attr('href') || "";
+            const linkText = $d(el).text().toLowerCase();
+            
+            // If it's a DirectLink, assume it's a document link (NICGEP often hides .pdf)
+            if (linkHref.includes('component=%24DirectLink')) {
+              let fullLink = linkHref;
+              if (!linkHref.startsWith('http')) {
+                 if (linkHref.startsWith('/')) {
+                   fullLink = `${baseUrl}${linkHref}`;
+                 } else {
+                   fullLink = `${baseUrl}/nicgep/${linkHref}`;
+                 }
+              }
+              
+              if (linkText.includes('notice') || linkText.includes('nit')) {
+                noticePdfUrl = fullLink;
+              } else {
+                // If it's another PDF, store it as the tender PDF
+                tenderPdfUrl = fullLink;
+              }
+            }
+          });
+          
+          if (workDescription && workDescription !== "Please refer Tender documents.") {
+             data["_workDescription"] = workDescription;
+          }
 
           await randomDelay(800, 1500);
         } catch (detailErr: any) {
@@ -157,15 +229,19 @@ export async function scrapeStateTenders(
       const openingDesc = bidOpeningDate
         ? `Bid Opening: ${bidOpeningDate}`
         : `Opening Date: ${openingDateStr}`;
-      const description = `${openingDesc} | Published: ${publishedDateStr}`;
+      
+      // Use real description if fetched, else fallback to dates
+      let description = (workDescription && workDescription !== "Please refer Tender documents.") 
+        ? workDescription 
+        : `${openingDesc} | Published: ${publishedDateStr}`;
 
       const tenderObj = {
         district: orgName,
         title: cleanTitle,
-        description,
+        description, // We will overwrite this if workDescription is found inside the loop
         startDate: finalStartDate,
         endDate: finalEndDate,
-        sourceUrl: detailUrl,
+        sourceUrl: stableUrl, // Use stable identifier instead of ephemeral session URL
         emd,
         tenderValue,
         applicationCost,
@@ -192,10 +268,10 @@ export async function scrapeStateTenders(
       if (validData) {
         allValidTenders.push(validData);
         try {
-          await prisma.tender.upsert({
-            where: { sourceUrl: detailUrl },
+          const savedTender = await prisma.tender.upsert({
+            where: { sourceUrl: stableUrl },
             update: {
-              description: validData.description,
+              // Ensure we don't accidentally overwrite a good description with a date string
               startDate: validData.startDate,
               endDate: validData.endDate,
               emd: validData.emd,
@@ -203,21 +279,28 @@ export async function scrapeStateTenders(
               applicationCost: validData.applicationCost,
             },
             create: {
-              state: "Odisha",
+              state: targetRegion, // Fix: Use the dynamic target region instead of hardcoded 'Odisha'
               level: "STATE",
               organisation: validData.district,
               title: validData.title,
               description: validData.description,
               startDate: validData.startDate,
               endDate: validData.endDate,
-              noticePdfUrl: validData.noticePdfUrl,
-              tenderPdfUrl: validData.tenderPdfUrl || "",
-              sourceUrl: validData.sourceUrl,
+              // Only fallback to detailUrl if we completely failed to find the PDF link
+              noticePdfUrl: noticePdfUrl || validData.noticePdfUrl || detailUrl, 
+              tenderPdfUrl: tenderPdfUrl || validData.tenderPdfUrl || "",
+              sourceUrl: stableUrl,
               emd: validData.emd,
               tenderValue: validData.tenderValue,
               applicationCost: validData.applicationCost,
             },
           });
+          
+          // Download PDF via fresh detail page
+          if (href) {
+             await sessionService.downloadDocumentWithCaptcha(detailUrl, savedTender.id);
+          }
+
           newTendersCount++;
           if (onProgress) onProgress(1, 1);
         } catch (dbError) {

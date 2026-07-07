@@ -23,9 +23,10 @@ export class TendersService {
     dateRange?: string | null;
     includeStats?: string | null;
     tenderType?: string | null;
+    state?: string | null;
   }) {
     const {
-      userId, district, search, active, priority, page, pageSize, date, excludeToday, tenderType
+      userId, district, search, active, priority, page, pageSize, date, excludeToday, tenderType, state
     } = params;
 
     const keywords = await this.prisma.priorityKeyword.findMany();
@@ -43,6 +44,10 @@ export class TendersService {
       if (district) where.district = district;
     } else if (district) {
       AND.push({ OR: [{ district }, { organisation: district }] });
+    }
+
+    if (state) {
+      where.state = state;
     }
 
     if (priority === "HIGH") {
@@ -151,6 +156,49 @@ export class TendersService {
       data: formattedTenders,
       meta: { total, pendingQueue, page, pageSize, totalPages: Math.ceil(total / pageSize) },
     };
+  }
+
+  async getTenderById(id: string, userId?: string | null) {
+    const tender = await this.prisma.tender.findUnique({ where: { id } });
+    if (!tender) return null;
+
+    let allowedFields: string[] = [];
+    let isUnlockedWithCredit = false;
+
+    if (userId) {
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { userId },
+        include: { tenant: { include: { subscription: true } } }
+      });
+
+      if (member?.tenant?.id) {
+        const unlock = await this.prisma.tenantUnlockedTender.findFirst({
+          where: { tenantId: member.tenant.id, tenderId: id }
+        });
+        if (unlock) isUnlockedWithCredit = true;
+      }
+
+      if (member?.tenant?.subscription?.planType) {
+        const plan = await this.prisma.pricingPlan.findUnique({
+          where: { name: member.tenant.subscription.planType }
+        });
+        if (plan) allowedFields = plan.allowedTenderFields;
+      } else {
+        const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+        if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+      }
+    } else {
+      const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+      if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+    }
+
+    const enhancedTender = {
+      ...tender,
+      isBookmarked: false,
+      isApplied: false,
+    };
+
+    return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
   }
 
   // TODO: Update these methods in Phase 3 to use TenantTenderAction

@@ -2,12 +2,17 @@ import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { extractTenderDetailsFromPdf, extractTenderDetailsFromText, ExtractedTenderDetails } from "../scraper/pdf-extractor";
 import { EmailService } from "../email/email.service";
+import * as path from 'path';
+import * as fs from 'fs';
+
+import { SessionService } from "../scraper/session.service";
 
 @Injectable()
 export class QueueService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly emailService: EmailService
+    private readonly emailService: EmailService,
+    private readonly sessionService: SessionService
   ) {}
 
   async processQueue() {
@@ -42,11 +47,45 @@ export class QueueService {
 
       try {
         let details: ExtractedTenderDetails | null = null;
-        if (tender.level === "STATE") {
-          details = await extractTenderDetailsFromText(tender.title, tender.description || "");
-        } else if (targetPdf) {
-          details = await extractTenderDetailsFromPdf(targetPdf);
-        } else if (tender.title) {
+        
+        if (targetPdf) {
+          const fileName = `tender_${tender.id}.pdf`;
+          const localPdfPath = path.join(process.cwd(), 'downloads', fileName);
+          
+          if (tender.level === "STATE") {
+            // Requirement: Download is done during scraping. SKIP expensive PDF extraction for State tenders.
+            // Instead, use cheap text extraction to generate summary and tags from the title/description.
+            details = await extractTenderDetailsFromText(tender.title, tender.description || "");
+          } else {
+            // Download the PDF for DISTRICT tenders
+            if (!fs.existsSync(localPdfPath)) {
+               try {
+                  const axios = require('axios');
+                  const response = await axios.get(targetPdf, {
+                     responseType: "arraybuffer",
+                     timeout: 30000,
+                     headers: {
+                       "User-Agent":
+                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                       Accept: "application/pdf",
+                     },
+                  });
+                  const downloadsDir = path.join(process.cwd(), 'downloads');
+                  if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                  fs.writeFileSync(localPdfPath, response.data);
+               } catch (downloadErr: any) {
+                  console.error(`[Queue] Failed to download PDF for ${tender.id}:`, downloadErr.message);
+               }
+            }
+          }
+
+          if (fs.existsSync(localPdfPath) && tender.level !== "STATE") {
+             details = await extractTenderDetailsFromPdf(localPdfPath);
+          } else {
+             details = await extractTenderDetailsFromText(tender.title, tender.description || "");
+          }
+        } else {
+          // Fallback for tenders with no PDF URL at all
           details = await extractTenderDetailsFromText(tender.title, tender.description || "");
         }
 

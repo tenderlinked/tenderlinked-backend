@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
+import { ServeStaticModule } from "@nestjs/serve-static";
+import { join } from "path";
 import { PrismaModule } from "./prisma/prisma.module";
 import { HealthModule } from "./health/health.module";
 import { TendersModule } from "./tenders/tenders.module";
@@ -28,6 +30,11 @@ import { RegionsModule } from './regions/regions.module';
     ConfigModule.forRoot({ isGlobal: true }),
     // Enable cron/schedule globally
     ScheduleModule.forRoot(),
+    // Serve downloaded files statically
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'downloads'),
+      serveRoot: '/downloads',
+    }),
     // Global Prisma
     PrismaModule,
     // Feature modules

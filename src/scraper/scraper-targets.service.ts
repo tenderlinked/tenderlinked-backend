@@ -29,7 +29,7 @@ export class ScraperTargetsService {
     return target;
   }
 
-  async create(data: { name: string; type: string; url: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean }) {
+  async create(data: { name: string; type: string; url: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean; scraperType?: string }) {
     return this.prisma.scraperTarget.create({
       data: {
         name: data.name,
@@ -39,6 +39,7 @@ export class ScraperTargetsService {
         regionStateId: data.regionStateId,
         regionDistrictId: data.regionDistrictId,
         isActive: data.isActive ?? true,
+        scraperType: data.scraperType || "AUTO",
       },
     });
   }

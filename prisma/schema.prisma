@@ -163,42 +163,113 @@ model UserProfile {
 model Tender {
   id              String   @id @default(uuid())
   localId         Int      @default(autoincrement())
+  tenderCode      String?  @unique // e.g. "TL-OD-000001" — human-readable reference ID
 
   // Geographic Metadata
   state           String?
+  regionStateId   String?
+  regionState     RegionState? @relation(fields: [regionStateId], references: [id])
   district        String?
-  city            String?
-  level           String?  // e.g., "CENTRAL", "STATE", "DISTRICT"
+  regionDistrictId String?
+  regionDistrict  RegionDistrict? @relation(fields: [regionDistrictId], references: [id])
+  city            String?   // populated from "Location" field
+  level           String?   // e.g., "CENTRAL", "STATE", "DISTRICT"
   organisation    String?
+  pincode         String?
 
-  // Tender Details
+  // ── Basic Tender Details ───────────────────────────────────────────
   title           String
   description     String?
+  tenderId        String?   @unique // NICGEP Tender ID — primary dedup key e.g. "2026_OSCSC_134676_1"
+  tenderRefNumber String?   // e.g. "1392/06.07.2026"
+  tenderType      String?   // "Open Tender" / "Limited Tender"
+  formOfContract  String?   // "Percentage" / "Item Rate"
+  tenderCategory  String?   // "Works" / "Services" / "Goods"
+  noOfCovers      Int?
+  paymentMode     String?   // "Online" / "Not Applicable"
+  withdrawalAllowed        Boolean?
+  twoStageBidding          Boolean?
+  generalTechEvalAllowed   Boolean?
+  itemWiseTechEvalAllowed  Boolean?
+  multiCurrencyBOQ         Boolean?
+  multiCurrencyFee         Boolean?
 
-  startDate       DateTime?
-  endDate         DateTime?
+  // ── Payment Instruments ────────────────────────────────────────────
+  onlineBankers   String?   // comma-joined bank names e.g. "ICICI BANK, ICICI NEFT/RTGS"
 
+  // ── Covers Information ─────────────────────────────────────────────
+  coversInfo      String?   // JSON array: [{coverNo, coverType, description, documentType}]
+
+  // ── Work Item Details ──────────────────────────────────────────────
+  productCategory     String?
+  subCategory         String?
+  contractType        String?
+  bidValidityDays     Int?
+  periodOfWorkDays    Int?
+  bidOpeningPlace     String?
+  preBidMeetingAddress String?
+  preBidMeetingDate    DateTime?
+  preBidMeetingPlace   String?
+  ndaPreQualification  String?
+  allowNdaTender       Boolean?
+  allowPreferentialBidder Boolean?
+
+  // ── Critical Dates ─────────────────────────────────────────────────
+  publishedDate          DateTime?
+  docDownloadStartDate   DateTime?
+  docDownloadEndDate     DateTime?
+  clarificationStartDate DateTime?
+  clarificationEndDate   DateTime?
+  bidOpeningDate         DateTime?
+
+  startDate       DateTime?  // Bid Submission Start Date
+  endDate         DateTime?  // Bid Submission End Date
+
+  // ── Document URLs ──────────────────────────────────────────────────
   noticePdfUrl    String?
   tenderPdfUrl    String?
 
+  // ── Tender Fee Details ─────────────────────────────────────────────
   tenderValue     String?
+  tenderAmount    Float?    // Raw numeric value for min/max filtering
   emd             String?
-  applicationCost String?
+  applicationCost String?   // Tender Fee in ₹
+  vatCharges      String?
+  feePayableTo    String?
+  feePayableAt    String?
+  feeExemptionAllowed String?
 
+  // ── EMD Fee Details ────────────────────────────────────────────────
+  emdExemptionAllowed String?
+  emdFeeType          String?
+  emdPercentage       String?
+  emdPayableTo        String?
+  emdPayableAt        String?
+
+  // ── Tender Inviting Authority ──────────────────────────────────────
+  invitingAuthorityName        String?
+  invitingAuthorityAddress     String?
+  invitingAuthorityDesignation String?
+  organisationChain            String?
+
+  // ── AI Processing ─────────────────────────────────────────────────
   aiSummary       String?
   tags            String[] @default([])
-
   aiProcessed     Boolean  @default(false)
+  documentsDownloaded Boolean @default(false)
   aiError         String?
 
-  sourceUrl       String   @unique // Highly recommended to ensure unique scraping
+  sourceUrl       String?  // Real NICGEP detail URL (session-specific, for reference only)
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@index([state, district])
   @@index([endDate])
+  @@index([bidOpeningDate])
+  @@index([productCategory])
 }
+
 
 // ------------------------------------------------------------------
 // TENANT-ISOLATED TENDER INTERACTIONS
@@ -240,6 +311,7 @@ model TenantUnlockedTender {
 model ScrapeLog {
   id            String   @id @default(uuid())
   
+  targetId      String?  // Reference to ScraperTarget.id (optional for backward compatibility)
   targetRegion  String   // e.g., "Odisha", "Maharashtra"
   status        String
   tendersFound  Int
@@ -261,6 +333,7 @@ model ScraperTarget {
   regionDistrict   RegionDistrict? @relation(fields: [regionDistrictId], references: [id], onDelete: Cascade)
 
   url       String
+  scraperType String @default("AUTO") // "AUTO", "NICGEP", "AP_EPROCUREMENT"
   isActive  Boolean  @default(true)
   isVerified Boolean @default(false)
   cronSchedule String?
@@ -272,8 +345,10 @@ model ScraperTarget {
 model RegionState {
   id        String   @id @default(uuid())
   name      String   @unique
+  code      String?  @unique // e.g., "AP", "OD", "MH", "UP"
   districts RegionDistrict[]
   targets   ScraperTarget[]
+  tenders   Tender[]
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -285,6 +360,7 @@ model RegionDistrict {
   stateId   String
   state     RegionState @relation(fields: [stateId], references: [id], onDelete: Cascade)
   targets   ScraperTarget[]
+  tenders   Tender[]
   
   @@unique([name, stateId])
   createdAt DateTime @default(now())

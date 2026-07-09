@@ -1,10 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import axios from 'axios';
+import * as https from 'https';
+import * as crypto from 'crypto';
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const cookieParser = require('cookie-parser');
 
 async function bootstrap() {
+  // Fix for scraping ancient Indian Govt SSL certificates
+  axios.defaults.httpsAgent = new https.Agent({
+    secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
+  });
+
   const app = await NestFactory.create(AppModule);
 
   // Enable cookie parsing

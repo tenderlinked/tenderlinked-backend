@@ -42,6 +42,8 @@ export class TendersController {
   @ApiQuery({ name: "includeStats", required: false, description: "Include stats in metadata (true)" })
   @ApiQuery({ name: "tenderType", required: false, description: "Type of tender (state/district)" })
   @ApiQuery({ name: "state", required: false, description: "Filter by state" })
+  @ApiQuery({ name: "category", required: false, description: "Filter by category" })
+  @ApiQuery({ name: "authority", required: false, description: "Filter by authority" })
   async getTenders(
     @Query("district") district?: string,
     @Query("search") search?: string,
@@ -56,7 +58,13 @@ export class TendersController {
     @Query("dateRange") dateRange?: string,
     @Query("includeStats") includeStats?: string,
     @Query("tenderType") tenderType?: string,
-    @Query("state") state?: string,
+    @Query("states") statesParam?: string | string[],
+    @Query("districts") districtsParam?: string | string[],
+    @Query("categories") categoriesParam?: string | string[],
+    @Query("authorities") authoritiesParam?: string | string[],
+    @Query("keywords") keywordsParam?: string | string[],
+    @Query("minAmount") minAmount?: string,
+    @Query("maxAmount") maxAmount?: string,
     @Req() req?: any
   ) {
     try {
@@ -73,9 +81,14 @@ export class TendersController {
         }
       }
 
+      const parseArr = (v?: string | string[]) => {
+        if (!v) return [];
+        if (Array.isArray(v)) return v.flatMap(s => s.split(',')).filter(Boolean);
+        return v.split(',').filter(Boolean);
+      };
+
       return await this.tendersService.getTenders({
         userId,
-        district: district || null,
         search: search || null,
         active: active || null,
         priority: priority || null,
@@ -88,7 +101,13 @@ export class TendersController {
         dateRange: dateRange || null,
         includeStats: includeStats || null,
         tenderType: tenderType || null,
-        state: state || null,
+        states: parseArr(statesParam),
+        districts: parseArr(districtsParam),
+        categories: parseArr(categoriesParam),
+        authorities: parseArr(authoritiesParam),
+        sidebarKeywords: parseArr(keywordsParam),
+        minAmount: minAmount ? parseFloat(minAmount) : null,
+        maxAmount: maxAmount ? parseFloat(maxAmount) : null,
       });
     } catch (error: any) {
       console.error("[GET /tenders] Error:", error);
@@ -97,6 +116,30 @@ export class TendersController {
         details: error?.message || String(error),
       });
     }
+  }
+
+  @Get('autocomplete')
+  @ApiOperation({ summary: "Get autocomplete suggestions for global search" })
+  @ApiQuery({ name: "q", required: true, description: "Search query" })
+  async autocomplete(@Query("q") q: string) {
+    return this.tendersService.autocomplete(q);
+  }
+
+  @Get('sidebar-stats')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: "Get sidebar stats: states, cities, and keywords with tender counts" })
+  async getSidebarStats() {
+    return this.tendersService.getSidebarStats();
+  }
+
+  @Get('authorities')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: "Get a list of distinct authorities (organisations) for a state" })
+  @ApiQuery({ name: "state", required: false, description: "Filter by state" })
+  async getAuthorities(@Query("state") state?: string) {
+    return this.tendersService.getAuthorities(state);
   }
 
   @Get(':id')

@@ -126,8 +126,9 @@ export function parseTenderPage(html: string, district: string, sourceUrl: strin
       }
 
       if (title && (tenderPdfUrl || noticePdfUrl)) {
+        const cleanedDistrict = district.replace(/ District$/i, '').trim();
         tenders.push({
-          district,
+          district: cleanedDistrict,
           title,
           description,
           startDate,

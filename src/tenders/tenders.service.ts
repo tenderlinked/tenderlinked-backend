@@ -23,10 +23,17 @@ export class TendersService {
     dateRange?: string | null;
     includeStats?: string | null;
     tenderType?: string | null;
-    state?: string | null;
+    states?: string[];
+    districts?: string[];
+    categories?: string[];
+    authorities?: string[];
+    minAmount?: number | null;
+    maxAmount?: number | null;
+    sidebarKeywords?: string[];
   }) {
     const {
-      userId, district, search, active, priority, page, pageSize, date, excludeToday, tenderType, state
+      userId, search, active, priority, page, pageSize, date, excludeToday, tenderType,
+      states, districts, categories, authorities, minAmount, maxAmount, sidebarKeywords
     } = params;
 
     const keywords = await this.prisma.priorityKeyword.findMany();
@@ -35,19 +42,49 @@ export class TendersService {
     const where: any = {};
     const AND: any[] = [];
 
-    // Map legacy tenderType to new unified geographic metadata
-    if (tenderType === "state") {
-      where.level = "STATE";
-      if (district) where.organisation = district;
-    } else if (tenderType === "district") {
-      where.level = "DISTRICT";
-      if (district) where.district = district;
-    } else if (district) {
-      AND.push({ OR: [{ district }, { organisation: district }] });
+    // Filter by States
+    if (states && states.length > 0) {
+      // If "All States" is in the list, we don't need to filter by state
+      if (!states.includes("All States")) {
+        AND.push({
+          OR: states.map(s => ({ state: { contains: s, mode: 'insensitive' } }))
+        });
+      }
     }
 
-    if (state) {
-      where.state = state;
+    // Filter by Districts / Cities
+    if (districts && districts.length > 0) {
+      if (!districts.includes("All Cities")) {
+        AND.push({
+          OR: districts.flatMap(d => [
+            { district: { contains: d, mode: 'insensitive' } },
+            { city: { contains: d, mode: 'insensitive' } },
+            { organisation: { contains: d, mode: 'insensitive' } }
+          ])
+        });
+      }
+    }
+
+    // Filter by Categories
+    if (categories && categories.length > 0 && !categories.includes("all")) {
+      AND.push({
+        OR: categories.map(c => ({ tenderCategory: { contains: c, mode: 'insensitive' } }))
+      });
+    }
+
+    // Filter by Authorities
+    if (authorities && authorities.length > 0 && !authorities.includes("all")) {
+      AND.push({
+        OR: authorities.map(a => ({ organisation: { contains: a, mode: 'insensitive' } }))
+      });
+    }
+
+    // Filter by Tender Amount
+    if (minAmount !== undefined && minAmount !== null) {
+      where.tenderAmount = { ...where.tenderAmount, gte: minAmount };
+    }
+    if (maxAmount !== undefined && maxAmount !== null) {
+      where.tenderAmount = { ...where.tenderAmount, lte: maxAmount };
     }
 
     if (priority === "HIGH") {
@@ -68,7 +105,27 @@ export class TendersService {
         OR: [
           { title: { contains: search, mode: "insensitive" } },
           { description: { contains: search, mode: "insensitive" } },
+          { state: { contains: search, mode: "insensitive" } },
+          { district: { contains: search, mode: "insensitive" } },
+          { city: { contains: search, mode: "insensitive" } },
+          { organisation: { contains: search, mode: "insensitive" } },
+          { tenderCategory: { contains: search, mode: "insensitive" } },
         ],
+      });
+    }
+
+    // Sidebar keyword filter — each keyword is an OR across all text fields
+    if (sidebarKeywords && sidebarKeywords.length > 0) {
+      AND.push({
+        OR: sidebarKeywords.flatMap(kw => [
+          { title: { contains: kw, mode: 'insensitive' as const } },
+          { description: { contains: kw, mode: 'insensitive' as const } },
+          { state: { contains: kw, mode: 'insensitive' as const } },
+          { district: { contains: kw, mode: 'insensitive' as const } },
+          { city: { contains: kw, mode: 'insensitive' as const } },
+          { organisation: { contains: kw, mode: 'insensitive' as const } },
+          { tenderCategory: { contains: kw, mode: 'insensitive' as const } },
+        ]),
       });
     }
 
@@ -230,5 +287,151 @@ export class TendersService {
       where: { id },
       data: dto,
     });
+  }
+
+  async getSidebarStats() {
+    const KEYWORDS = [
+      "Road", "Bridge", "Hospital", "School", "Water Supply", "Solar",
+      "Construction", "Software", "Electrical", "Drainage", "Railway",
+      "Building", "Irrigation", "Civil", "Sewage", "Power", "Sanitation"
+    ];
+
+    const now = new Date();
+
+    const [stateGroups, cityGroups, ...keywordCounts] = await Promise.all([
+      this.prisma.tender.groupBy({
+        by: ['state'],
+        where: { state: { not: null }, endDate: { gte: now } },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      this.prisma.tender.groupBy({
+        by: ['city'],
+        where: { city: { not: null }, endDate: { gte: now } },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+        take: 30,
+      }),
+      ...KEYWORDS.map(kw => {
+        const kwSearch = { contains: kw, mode: 'insensitive' as const };
+        return this.prisma.tender.count({
+          where: {
+            endDate: { gte: now },
+            OR: [
+              { title: kwSearch },
+              { description: kwSearch },
+              { state: kwSearch },
+              { district: kwSearch },
+              { city: kwSearch },
+              { organisation: kwSearch },
+              { tenderCategory: kwSearch },
+            ],
+          },
+        });
+      }),
+    ]);
+
+    const keywords = KEYWORDS
+      .map((kw, i) => ({ keyword: kw, count: keywordCounts[i] as number }))
+      .filter(k => k.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    const toTitleCase = (str: string) => {
+      return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    };
+
+    const aggregateCounts = (groups: { name: string, count: number }[]) => {
+      const map: Record<string, number> = {};
+      for (const item of groups) {
+        if (!item.name) continue;
+        const normalized = toTitleCase(item.name.trim());
+        map[normalized] = (map[normalized] || 0) + item.count;
+      }
+      return Object.entries(map)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+    };
+
+    const rawStates = stateGroups.map(s => ({ name: s.state as string, count: s._count.id }));
+    const states = aggregateCounts(rawStates);
+
+    const rawCities = cityGroups.map(c => ({ name: c.city as string, count: c._count.id }));
+    const cities = aggregateCounts(rawCities).slice(0, 30); // keep max 30 after aggregation
+
+    return { states, cities, keywords };
+  }
+
+  async autocomplete(q: string) {
+    if (!q || q.trim().length < 2) return [];
+    
+    const query = q.trim();
+    const insensitiveQuery = { contains: query, mode: 'insensitive' as const };
+    
+    const [states, cities, authorities] = await Promise.all([
+      this.prisma.tender.findMany({
+        where: { state: insensitiveQuery },
+        select: { state: true },
+        distinct: ['state'],
+        take: 10
+      }),
+      this.prisma.tender.findMany({
+        where: { OR: [{ city: insensitiveQuery }, { district: insensitiveQuery }] },
+        select: { city: true, district: true },
+        distinct: ['city', 'district'],
+        take: 20
+      }),
+      this.prisma.tender.findMany({
+        where: { organisation: insensitiveQuery },
+        select: { organisation: true },
+        distinct: ['organisation'],
+        take: 10
+      })
+    ]);
+
+    const suggestions: { text: string; type: string; category: string }[] = [];
+
+    states.forEach(s => {
+      if (s.state) suggestions.push({ text: s.state, type: 'State', category: 'states' });
+    });
+
+    cities.forEach(c => {
+      if (c.city && c.city.toLowerCase().includes(query.toLowerCase())) {
+        suggestions.push({ text: c.city, type: 'City', category: 'districts' });
+      }
+      if (c.district && c.district.toLowerCase().includes(query.toLowerCase())) {
+        suggestions.push({ text: c.district, type: 'District', category: 'districts' });
+      }
+    });
+
+    authorities.forEach(a => {
+      if (a.organisation) suggestions.push({ text: a.organisation, type: 'Authority', category: 'authorities' });
+    });
+
+    // Deduplicate exact matches inside the same category
+    const unique: typeof suggestions = [];
+    const seen = new Set();
+    for (const item of suggestions) {
+      const key = `${item.text}-${item.type}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(item);
+      }
+    }
+
+    return unique;
+  }
+
+  async getAuthorities(state?: string) {
+    const where: any = {};
+    if (state && state !== "All States") {
+      where.state = { contains: state, mode: 'insensitive' };
+    }
+    const result = await this.prisma.tender.groupBy({
+      by: ['organisation'],
+      where,
+      _count: { organisation: true },
+      orderBy: { _count: { organisation: 'desc' } }
+    });
+    return result.map(r => r.organisation).filter(Boolean);
   }
 }

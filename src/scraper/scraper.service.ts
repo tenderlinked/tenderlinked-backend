@@ -6,6 +6,7 @@ import { withRetry } from "./retry";
 import { parseTenderPage } from "./parser";
 import { ScrapeResult, TenderSchema, ScrapeInstance, ScrapeStatus } from "./types";
 import { scrapeStateTenders } from "./nicgep-scraper";
+import { scrapeApStateTenders } from "./apeprocurement-scraper";
 import { v4 as uuidv4 } from 'uuid';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SessionService } from "./session.service";
@@ -53,7 +54,7 @@ export class ScraperService {
       .filter(log => !activeNames.has(log.targetRegion))
       .map(log => ({
         id: log.id,
-        targetId: '',
+        targetId: log.targetId || '',
         targetName: log.targetRegion,
         targetType: 'HISTORY',
         sourceUrl: '',
@@ -105,14 +106,21 @@ export class ScraperService {
         }
 
         // Use the base URL provided in the database and append pagination
-        const url = target.url.includes('?') 
-          ? `${target.url}&page=${page}` 
-          : `${target.url}?page=${page}`;
+        let url = target.url;
+        if (page > 0) {
+          const base = url.replace(/\/$/, '');
+          if (base.includes('?')) {
+            url = `${base}&page=${page}`;
+          } else {
+            url = `${base}/page/${page + 1}/`;
+          }
+        }
 
         // 1. Fetch with retry and timeout
         const response = await withRetry(async () => {
           return await axios.get(url, {
             timeout: DEFAULT_TIMEOUT,
+            validateStatus: (status) => status < 400 || status === 404,
             headers: {
               "User-Agent": USER_AGENT,
               Accept:
@@ -121,6 +129,12 @@ export class ScraperService {
             },
           });
         }, 3, 1000);
+
+        if (response.status === 404) {
+          console.log(`[Scraper Info] District ${district} reached 404 on page ${page} (${url}). Stopping pagination.`);
+          hasMore = false;
+          break;
+        }
 
         // 2. Parse HTML
         const html = response.data;
@@ -169,7 +183,10 @@ export class ScraperService {
         for (const tender of validTenders) {
           try {
             const existing = await this.prisma.tender.findFirst({
-              where: { sourceUrl: tender.sourceUrl },
+              where: { 
+                title: tender.title,
+                district: tender.district 
+              },
             });
             if (!existing) {
               await this.prisma.tender.create({
@@ -212,6 +229,7 @@ export class ScraperService {
 
       await this.prisma.scrapeLog.create({
         data: {
+          targetId: target.id,
           targetRegion: district,
           status: "SUCCESS",
           tendersFound: allValidTenders.length,
@@ -236,6 +254,7 @@ export class ScraperService {
 
       await this.prisma.scrapeLog.create({
         data: {
+          targetId: target.id,
           targetRegion: district,
           status: "FAILED",
           tendersFound: 0,
@@ -334,7 +353,19 @@ export class ScraperService {
            }
         };
 
-        const result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        let result: ScrapeResult;
+        const scraperType = (target as any).scraperType || "AUTO";
+        
+        if (scraperType === "AP_EPROCUREMENT") {
+            result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else if (scraperType === "NICGEP") {
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else if (target.url.includes("apeprocurement.gov.in")) {
+            // Fallback to URL-based auto-routing
+            result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else {
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        }
         
         const current = this.activeInstances.get(instance.id);
         if (current) {
@@ -439,7 +470,19 @@ export class ScraperService {
            }
         };
 
-        const result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        let result: ScrapeResult;
+        const scraperType = (target as any).scraperType || "AUTO";
+        
+        if (scraperType === "AP_EPROCUREMENT") {
+            result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else if (scraperType === "NICGEP") {
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else if (target.url.includes("apeprocurement.gov.in")) {
+            // Fallback to URL-based auto-routing
+            result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        } else {
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+        }
         
         const current = this.activeInstances.get(instance.id);
         if (current) {

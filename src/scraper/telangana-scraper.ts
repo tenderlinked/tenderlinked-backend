@@ -3,6 +3,7 @@ import { ScrapeResult, ScrapeStatus } from "./types";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { SessionService } from "./session.service";
+import { cleanCityName, parseAmount } from "./utils";
 
 puppeteer.use(StealthPlugin());
 
@@ -199,6 +200,7 @@ export async function scrapeApStateTenders(
                 tenderCategory: row.tenderCategory,
                 title: row.title,
                 tenderValue: row.estimatedValue,
+                tenderAmount: parseAmount(row.estimatedValue),
                 startDate: parseAPDate(row.startDate),
                 endDate: parseAPDate(row.closingDate),
                 sourceUrl: page.url(),
@@ -219,6 +221,7 @@ export async function scrapeApStateTenders(
                         startDate: tenderObj.startDate,
                         endDate: tenderObj.endDate,
                         tenderValue: tenderObj.tenderValue,
+                        tenderAmount: tenderObj.tenderAmount,
                         tenderRefNumber: tenderObj.tenderRefNumber,
                         tenderCategory: tenderObj.tenderCategory,
                         title: tenderObj.title,
@@ -234,6 +237,7 @@ export async function scrapeApStateTenders(
                         startDate: tenderObj.startDate,
                         endDate: tenderObj.endDate,
                         tenderValue: tenderObj.tenderValue,
+                        tenderAmount: tenderObj.tenderAmount,
                         tenderId: tenderObj.tenderId,
                         tenderRefNumber: tenderObj.tenderRefNumber,
                         tenderCategory: tenderObj.tenderCategory,
@@ -339,7 +343,8 @@ export async function scrapeApStateTenders(
                                 } else if (key === 'District') {
                                     updateData.district = val;
                                 } else if (key === 'City') {
-                                    updateData.city = val;
+                                    updateData.city = cleanCityName(val as string);
+                                    updateData.location = val as string;
                                 } else if (key === 'Address') {
                                     updateData.invitingAuthorityAddress = val;
                                 } else if (key === 'Contact Details') {

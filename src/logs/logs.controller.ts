@@ -1,10 +1,9 @@
 import { Controller, Get, Query, InternalServerErrorException, UseGuards } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBearerAuth } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { LogsService } from "./logs.service";
 import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Logs")
-@ApiBearerAuth()
 @Controller("logs")
 @UseGuards(SuperAdminGuard)
 export class LogsController {
@@ -12,7 +11,10 @@ export class LogsController {
 
   @Get("scrape")
   @ApiOperation({ summary: "Get paginated scrape logs" })
-  @ApiQuery({ name: "page", required: false, description: "Page number" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiQuery({ name: "page", required: false, description: "Page number" })
   @ApiQuery({ name: "pageSize", required: false, description: "Page size" })
   async getScrapeLogs(
     @Query("page") page?: string,

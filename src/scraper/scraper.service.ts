@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, OnModuleInit } from "@nestjs/common";
 import axios from "axios";
 import { PrismaService } from "../prisma/prisma.service";
 import { scraperLimit, randomDelay } from "./queue";
@@ -19,7 +19,7 @@ const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 @Injectable()
-export class ScraperService {
+export class ScraperService implements OnModuleInit {
   private activeInstances = new Map<string, ScrapeInstance>();
   private readonly CACHE_DIR = path.join(process.cwd(), "scraper_cache");
   private readonly CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -31,6 +31,14 @@ export class ScraperService {
     if (!fs.existsSync(this.CACHE_DIR)) {
       fs.mkdirSync(this.CACHE_DIR, { recursive: true });
     }
+  }
+
+  async onModuleInit() {
+    // Clean up any zombie runs left over from a crash
+    await this.prisma.scrapeLog.updateMany({
+      where: { status: 'RUNNING' },
+      data: { status: 'FAILED', error: 'Server restarted unexpectedly' }
+    });
   }
 
   stopScrape() {
@@ -88,6 +96,16 @@ export class ScraperService {
     const allValidTenders: any[] = [];
     const seenTitles = new Set<string>();
     let totalNewTendersCount = 0;
+
+    const scrapeLog = await this.prisma.scrapeLog.create({
+      data: {
+        targetId: target.id,
+        targetRegion: district,
+        status: "RUNNING",
+        tendersFound: 0,
+        source,
+      },
+    });
 
     try {
       while (hasMore && page < maxPages) {
@@ -227,13 +245,11 @@ export class ScraperService {
         }
       }
 
-      await this.prisma.scrapeLog.create({
+      await this.prisma.scrapeLog.update({
+        where: { id: scrapeLog.id },
         data: {
-          targetId: target.id,
-          targetRegion: district,
           status: "SUCCESS",
           tendersFound: allValidTenders.length,
-          source,
         },
       });
 
@@ -249,17 +265,14 @@ export class ScraperService {
         tenders: allValidTenders,
         newTendersCount: totalNewTendersCount,
       };
-    } catch (error) {
-      console.error(`[Scraper Error] Failed to scrape ${district}:`, error);
+    } catch (error: any) {
+      console.error(`[Scraper Error] District: ${district}`, error);
 
-      await this.prisma.scrapeLog.create({
+      await this.prisma.scrapeLog.update({
+        where: { id: scrapeLog.id },
         data: {
-          targetId: target.id,
-          targetRegion: district,
           status: "FAILED",
-          tendersFound: 0,
-          error: error instanceof Error ? error.message : "Unknown error",
-          source,
+          error: error.message,
         },
       });
 

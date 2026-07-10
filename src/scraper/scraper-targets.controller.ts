@@ -5,7 +5,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { parseTenderPage } from './parser';
 import { ScraperTargetsService } from './scraper-targets.service';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 
@@ -13,7 +13,6 @@ const healthCache = new Map<string, { healthy: boolean, timestamp: number }>();
 const CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 @ApiTags('Scraper Targets')
-@ApiBearerAuth()
 @UseGuards(SuperAdminGuard)
 @Controller('scraper-targets')
 export class ScraperTargetsController {
@@ -21,13 +20,19 @@ export class ScraperTargetsController {
 
   @Get()
   @ApiOperation({ summary: 'Get all scraper targets' })
-  findAll() {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })findAll() {
     return this.scraperTargetsService.findAll();
   }
 
   @Get('health')
   @ApiOperation({ summary: 'Check if a URL is reachable' })
-  async checkHealth(@Query('url') url: string) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async checkHealth(@Query('url') url: string) {
     if (!url) return { healthy: false };
     
     if (healthCache.has(url)) {
@@ -68,7 +73,10 @@ export class ScraperTargetsController {
 
   @Get('preview')
   @ApiOperation({ summary: 'Test scrape a URL to preview extracted tenders' })
-  async previewScrape(@Query('url') url: string, @Query('type') type: string, @Query('name') name: string) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async previewScrape(@Query('url') url: string, @Query('type') type: string, @Query('name') name: string) {
     if (!url) return { success: false, reason: 'No URL provided' };
     
     try {
@@ -221,7 +229,10 @@ export class ScraperTargetsController {
 
   @Patch('bulk-update-state-urls')
   @ApiOperation({ summary: 'Bulk update URLs for a specific state based on pattern' })
-  async bulkUpdateStateUrls(@Body() data: { state: string, oldPattern?: string, newPattern?: string }) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async bulkUpdateStateUrls(@Body() data: { state: string, oldPattern?: string, newPattern?: string }) {
     if (!data.state) {
        return { success: false, reason: "Missing required fields" };
     }
@@ -247,25 +258,37 @@ export class ScraperTargetsController {
 
   @Post()
   @ApiOperation({ summary: 'Create a new scraper target' })
-  create(@Body() data: { name: string; type: string; url: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean }) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })create(@Body() data: { name: string; type: string; url: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean }) {
     return this.scraperTargetsService.create(data);
   }
 
   @Post('bulk')
   @ApiOperation({ summary: 'Create multiple scraper targets in bulk' })
-  createBulk(@Body() data: { targets: { name: string; type: string; url: string; state: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean }[] }) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })createBulk(@Body() data: { targets: { name: string; type: string; url: string; state: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean }[] }) {
     return this.scraperTargetsService.createBulk(data.targets);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update a scraper target' })
-  update(@Param('id') id: string, @Body() data: { name?: string; type?: string; url?: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean; isVerified?: boolean }) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })update(@Param('id') id: string, @Body() data: { name?: string; type?: string; url?: string; state?: string; regionStateId?: string; regionDistrictId?: string; isActive?: boolean; isVerified?: boolean }) {
     return this.scraperTargetsService.update(id, data);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a scraper target' })
-  remove(@Param('id') id: string) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })remove(@Param('id') id: string) {
     return this.scraperTargetsService.remove(id);
   }
 }

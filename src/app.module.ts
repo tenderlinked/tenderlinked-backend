@@ -23,6 +23,8 @@ import { PlansModule } from './plans/plans.module';
 import { CreditsModule } from './credits/credits.module';
 import { AuthModule } from './auth/auth.module';
 import { RegionsModule } from './regions/regions.module';
+import { OrganisationsModule } from './organisations/organisations.module';
+import { AwsModule } from './aws/aws.module';
 
 @Module({
   imports: [
@@ -32,12 +34,13 @@ import { RegionsModule } from './regions/regions.module';
     ScheduleModule.forRoot(),
     // Serve downloaded files statically
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'downloads'),
+      rootPath: join(process.cwd(), 'downloads'),
       serveRoot: '/downloads',
     }),
     // Global Prisma
     PrismaModule,
     // Feature modules
+    AwsModule,
     HealthModule,
     TendersModule,
     KeywordsModule,
@@ -57,6 +60,7 @@ import { RegionsModule } from './regions/regions.module';
     CreditsModule,
     AuthModule,
     RegionsModule,
+    OrganisationsModule,
   ],
 })
 export class AppModule {}

@@ -7,11 +7,15 @@ import * as path from 'path';
 
 puppeteer.use(StealthPlugin());
 
+import { S3Service } from '../aws/s3.service';
+
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
   private cookiesMap: Map<string, string> = new Map();
   private sessionPromises: Map<string, Promise<string | null>> = new Map();
+
+  constructor(private readonly s3Service: S3Service) {}
 
   private mergeCookies(oldCookieStr: string | null, setCookieHeader: string[] | undefined): string | null {
     if (!setCookieHeader) return oldCookieStr;
@@ -210,6 +214,7 @@ export class SessionService {
       }
 
       let anySuccess = false;
+      const uploadedFiles: string[] = [];
 
       // ── Step 3: Download each link one by one ──────────────────────
       for (let i = 0; i < docLinks.length; i++) {
@@ -293,16 +298,25 @@ export class SessionService {
         if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
         fs.renameSync(srcPath, destPath);
         const sizeKB = (fs.statSync(destPath).size / 1024).toFixed(1);
-        this.logger.log(`[${tenderId}] ✅ Saved ${docLink.filename} (${sizeKB} KB)`);
+        this.logger.log(`[${tenderId}] ✅ Saved locally ${docLink.filename} (${sizeKB} KB)`);
+        
+        // Upload to S3
+        const s3Key = `tenders/${downloadsSubDir || 'Unknown'}/${tenderId}/${docLink.filename}`;
+        await this.s3Service.uploadFile(destPath, s3Key, true); // true = delete after upload
+        
+        uploadedFiles.push(docLink.filename);
         anySuccess = true;
       }
 
       // Summary
       if (anySuccess) {
-        const files = fs.readdirSync(tenderDir);
         this.logger.log(
-          `[${tenderId}] ✅ All done. ${files.length} file(s): ${files.join(', ')}`,
+          `[${tenderId}] ✅ All done. Uploaded ${uploadedFiles.length} file(s) to S3: ${uploadedFiles.join(', ')}`,
         );
+        // Clean up the local tender directory since files are now in S3
+        if (fs.existsSync(tenderDir)) {
+          fs.rmdirSync(tenderDir, { recursive: true });
+        }
       } else {
         this.logger.error(`[${tenderId}] No documents were downloaded successfully.`);
       }

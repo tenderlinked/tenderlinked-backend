@@ -1,5 +1,5 @@
 import { Controller, Post, Body, UnauthorizedException, InternalServerErrorException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBody, ApiResponse } from '@nestjs/swagger';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -7,6 +7,12 @@ export class AuthController {
   
   @Post('login')
   @ApiOperation({ summary: 'Login to get an access token for API testing' })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' }) @ApiResponse({ status: 201, description: 'Successfully authenticated, returns tokens' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
   @ApiBody({ 
     schema: { 
       type: 'object',

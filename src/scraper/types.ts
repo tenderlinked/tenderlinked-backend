@@ -12,10 +12,13 @@ export const TenderSchema = z.object({
   sourceUrl: z.string().url().nullable().optional(), // real detail URL, for reference only
   tenderId: z.string().nullable().optional(),          // NICGEP ID — primary dedup key
   tenderValue: z.string().nullable().optional(),
+  tenderAmount: z.number().nullable().optional(),
   applicationCost: z.string().nullable().optional(),
+  emd: z.string().nullable().optional(),
 
   // Location
   city: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
   pincode: z.string().nullable().optional(),
 
   // Basic Details

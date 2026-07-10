@@ -1,10 +1,9 @@
 import { Controller, Post, Body, Get, Param, Query, UseGuards, Req } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 
 @ApiTags('Users')
-@ApiBearerAuth()
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -44,7 +43,10 @@ export class UsersController {
 
   @Post(':userId/super-admin')
   @ApiOperation({ summary: "Promote a user to Super Admin" })
-  @UseGuards(SuperAdminGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(SuperAdminGuard)
   async promoteToSuperAdmin(@Param('userId') userId: string) {
     return this.usersService.promoteToSuperAdmin(userId);
   }

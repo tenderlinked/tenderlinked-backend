@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Body, InternalServerErrorException } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiBody } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { PrismaService } from "../prisma/prisma.service";
 import { EmailService } from "./email.service";
 import { extractTenderDetailsFromPdf } from "../scraper/pdf-extractor";
@@ -14,7 +14,10 @@ export class EmailController {
 
   @Get("test-email")
   @ApiOperation({ summary: "Send a test email with high priority tenders" })
-  async testEmail() {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async testEmail() {
     try {
       const keywordsData = await this.prisma.priorityKeyword.findMany();
       const keywordList = keywordsData.map((k: any) => k.word);
@@ -67,7 +70,10 @@ export class EmailController {
 
   @Post("test-pdf")
   @ApiOperation({ summary: "Test PDF extraction" })
-  @ApiBody({ schema: { properties: { pdfUrl: { type: "string", description: "URL of the PDF to extract" } } } })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { pdfUrl: { type: "string", description: "URL of the PDF to extract" } } } })
   async testPdf(@Body() body: { pdfUrl: string }) {
     if (!body || !body.pdfUrl) {
       throw new InternalServerErrorException("Missing pdfUrl in request body.");

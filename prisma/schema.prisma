@@ -160,6 +160,18 @@ model UserProfile {
 // UNIFIED PAN-INDIA TENDER MODEL
 // ------------------------------------------------------------------
 
+model OrganisationMapping {
+  id              String   @id @default(uuid())
+  rawName         String   @unique
+  normalizedName  String?
+  isMapped        Boolean  @default(false)
+  state           String
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+
 model Tender {
   id              String   @id @default(uuid())
   localId         Int      @default(autoincrement())
@@ -167,12 +179,14 @@ model Tender {
 
   // Geographic Metadata
   state           String?
+  tenderId        String?   @unique // NICGEP Tender ID — primary dedup key e.g. "2026_OSCSC_134676_1"
   regionStateId   String?
   regionState     RegionState? @relation(fields: [regionStateId], references: [id])
   district        String?
   regionDistrictId String?
   regionDistrict  RegionDistrict? @relation(fields: [regionDistrictId], references: [id])
   city            String?   // populated from "Location" field
+  location        String?   // raw location string from the source
   level           String?   // e.g., "CENTRAL", "STATE", "DISTRICT"
   organisation    String?
   pincode         String?
@@ -180,7 +194,6 @@ model Tender {
   // ── Basic Tender Details ───────────────────────────────────────────
   title           String
   description     String?
-  tenderId        String?   @unique // NICGEP Tender ID — primary dedup key e.g. "2026_OSCSC_134676_1"
   tenderRefNumber String?   // e.g. "1392/06.07.2026"
   tenderType      String?   // "Open Tender" / "Limited Tender"
   formOfContract  String?   // "Percentage" / "Item Rate"
@@ -268,6 +281,8 @@ model Tender {
   @@index([endDate])
   @@index([bidOpeningDate])
   @@index([productCategory])
+  @@index([startDate(sort: Desc), createdAt(sort: Desc)])
+  @@index([aiProcessed])
 }
 
 

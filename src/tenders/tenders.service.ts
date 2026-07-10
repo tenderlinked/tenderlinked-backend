@@ -3,10 +3,19 @@ import { PrismaService } from "../prisma/prisma.service";
 import { redactTenderBasedOnPlan } from "../common/utils/content-gating.util";
 import { CreateTenderDto } from "./dto/create-tender.dto";
 import { UpdateTenderDto } from "./dto/update-tender.dto";
+import * as fs from 'fs';
+import * as path from 'path';
+import archiver = require('archiver');
+import { Response } from "express";
+
+import { S3Service } from "../aws/s3.service";
 
 @Injectable()
 export class TendersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly s3Service: S3Service,
+  ) {}
 
   async getTenders(params: {
     userId?: string | null;
@@ -258,6 +267,117 @@ export class TendersService {
     return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
   }
 
+  async getTenderDocuments(id: string): Promise<string[]> {
+    const tender = await this.prisma.tender.findUnique({
+      where: { id },
+      select: { tenderCode: true, id: true, documentsDownloaded: true, state: true }
+    });
+    
+    if (!tender || !tender.documentsDownloaded) return [];
+
+    const tenderIdPath = tender.tenderCode || tender.id;
+    
+    const stateTitle = tender.state || 'Unknown';
+    const stateLC = stateTitle.toLowerCase();
+    
+    // Check possible prefixes where the user might have uploaded them
+    const possiblePrefixes = [
+      `tenders/${stateTitle}/${tenderIdPath}/`,
+      `tenders/${stateLC}/${tenderIdPath}/`,
+      `${stateTitle}/${tenderIdPath}/`,
+      `${stateLC}/${tenderIdPath}/`,
+      `tenderlinked/${stateTitle}/${tenderIdPath}/`,
+      `tenderlinked/${stateLC}/${tenderIdPath}/`,
+      `downloads/${stateTitle}/${tenderIdPath}/`,
+      `downloads/${stateLC}/${tenderIdPath}/`
+    ];
+
+    let s3Keys: string[] = [];
+    for (const prefix of possiblePrefixes) {
+      s3Keys = await this.s3Service.listObjects(prefix);
+      if (s3Keys.length > 0) break;
+    }
+    
+    if (s3Keys.length === 0) return [];
+    
+    // Generate presigned URLs for each key
+    const urls = await Promise.all(s3Keys.map(key => this.s3Service.getPresignedUrl(key)));
+    return urls;
+  }
+
+  async downloadAllDocuments(id: string, res: Response): Promise<void> {
+    const tender = await this.prisma.tender.findUnique({
+      where: { id },
+      select: { tenderCode: true, id: true, documentsDownloaded: true, title: true, tenderId: true, state: true }
+    });
+    
+    if (!tender || !tender.documentsDownloaded) {
+      res.status(404).json({ success: false, message: "Documents not found" });
+      return;
+    }
+
+    const tenderIdPath = tender.tenderCode || tender.id;
+    const stateTitle = tender.state || 'Unknown';
+    const stateLC = stateTitle.toLowerCase();
+    
+    const possiblePrefixes = [
+      `tenders/${stateTitle}/${tenderIdPath}/`,
+      `tenders/${stateLC}/${tenderIdPath}/`,
+      `${stateTitle}/${tenderIdPath}/`,
+      `${stateLC}/${tenderIdPath}/`,
+      `tenderlinked/${stateTitle}/${tenderIdPath}/`,
+      `tenderlinked/${stateLC}/${tenderIdPath}/`,
+      `downloads/${stateTitle}/${tenderIdPath}/`,
+      `downloads/${stateLC}/${tenderIdPath}/`
+    ];
+
+    let s3Keys: string[] = [];
+    for (const prefix of possiblePrefixes) {
+      s3Keys = await this.s3Service.listObjects(prefix);
+      if (s3Keys.length > 0) break;
+    }
+
+    if (s3Keys.length === 0) {
+      res.status(404).json({ success: false, message: "No complete documents found" });
+      return;
+    }
+
+    // If exactly 1 file, stream it directly
+    if (s3Keys.length === 1) {
+      const key = s3Keys[0];
+      const filename = path.basename(key);
+      const stream = await this.s3Service.getObjectStream(key);
+      
+      res.set({
+        'Content-Type': filename.endsWith('.zip') ? 'application/zip' : 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    // Multiple files: zip them
+    const safeId = (tender.tenderId || tender.tenderCode || 'Documents').replace(/[^a-z0-9-_]/gi, '_');
+    const archiveName = `${safeId}.zip`;
+
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${archiveName}"`
+    });
+
+    // @ts-ignore
+    const archive = new archiver.ZipArchive({ zlib: { level: 5 } });
+    archive.pipe(res);
+
+    for (const key of s3Keys) {
+      const filename = path.basename(key);
+      const stream = await this.s3Service.getObjectStream(key);
+      archive.append(stream, { name: filename });
+    }
+
+    await archive.finalize();
+  }
+
   // TODO: Update these methods in Phase 3 to use TenantTenderAction
   async updateBookmark(id: string, isBookmarked: boolean, isState: boolean) {
     return { success: true, message: "Bookmark endpoint requires Tenant Context (Phase 3)" };
@@ -298,21 +418,23 @@ export class TendersService {
 
     const now = new Date();
 
-    const [stateGroups, cityGroups, ...keywordCounts] = await Promise.all([
-      this.prisma.tender.groupBy({
-        by: ['state'],
-        where: { state: { not: null }, endDate: { gte: now } },
-        _count: { id: true },
-        orderBy: { _count: { id: 'desc' } },
-      }),
-      this.prisma.tender.groupBy({
-        by: ['city'],
-        where: { city: { not: null }, endDate: { gte: now } },
-        _count: { id: true },
-        orderBy: { _count: { id: 'desc' } },
-        take: 30,
-      }),
-      ...KEYWORDS.map(kw => {
+    const stateGroups = await this.prisma.tender.groupBy({
+      by: ['state'],
+      where: { state: { not: null }, endDate: { gte: now } },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+    });
+
+    const cityGroups = await this.prisma.tender.groupBy({
+      by: ['city'],
+      where: { city: { not: null }, endDate: { gte: now } },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 30,
+    });
+
+    const keywordCounts = await Promise.all(
+      KEYWORDS.map(kw => {
         const kwSearch = { contains: kw, mode: 'insensitive' as const };
         return this.prisma.tender.count({
           where: {
@@ -328,8 +450,8 @@ export class TendersService {
             ],
           },
         });
-      }),
-    ]);
+      })
+    );
 
     const keywords = KEYWORDS
       .map((kw, i) => ({ keyword: kw, count: keywordCounts[i] as number }))

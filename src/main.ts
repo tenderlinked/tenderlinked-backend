@@ -44,6 +44,7 @@ async function bootstrap() {
         },
       },
     })
+    .addSecurityRequirements('oauth2')
     .addBearerAuth(
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'cron-secret',

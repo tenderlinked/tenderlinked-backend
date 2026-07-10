@@ -10,20 +10,22 @@ import {
   UseGuards,
   InternalServerErrorException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { KeywordsService } from "./keywords.service";
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @ApiTags("Keywords")
-@ApiBearerAuth()
 @Controller("keywords")
 export class KeywordsController {
   constructor(private readonly keywordsService: KeywordsService) {}
 
   @Get()
   @ApiOperation({ summary: "Get all keywords" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:read')
   async getAll() {
     try {
@@ -37,7 +39,10 @@ export class KeywordsController {
 
   @Post()
   @ApiOperation({ summary: "Create a new keyword" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { word: { type: "string" } } } })
   async create(@Body() body: { word: string }) {
@@ -52,7 +57,10 @@ export class KeywordsController {
 
   @Delete()
   @ApiOperation({ summary: "Delete a keyword" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   @ApiQuery({ name: "id", required: true, description: "Keyword ID" })
   async remove(@Query("id") id: string) {
@@ -69,7 +77,10 @@ export class KeywordsController {
 
   @Post('expansions')
   @ApiOperation({ summary: "Manually add a keyword to the expansion dictionary" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { baseWord: { type: "string" }, expansions: { type: "array", items: { type: "string" } }, status: { type: "string" } } } })
   async createExpansion(@Body() body: { baseWord: string, expansions?: string[], status?: string }) {
@@ -79,7 +90,10 @@ export class KeywordsController {
 
   @Get('expansions/pending')
   @ApiOperation({ summary: "Get pending keyword expansions" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:read')
   async getPendingExpansions() {
     const data = await this.keywordsService.getPendingExpansions();
@@ -88,7 +102,10 @@ export class KeywordsController {
 
   @Post('expansions/generate-and-save')
   @ApiOperation({ summary: "Generate expansions via AI and save immediately" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { baseWord: { type: "string" } } } })
   async generateAndSaveExpansion(@Body() body: { baseWord: string }) {
@@ -98,7 +115,10 @@ export class KeywordsController {
 
   @Post('expansions/:id/ai-suggest')
   @ApiOperation({ summary: "Auto-expand a keyword using AI" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   async autoExpand(@Param('id') id: string) {
     const expansions = await this.keywordsService.autoExpandKeyword(id);
@@ -107,7 +127,10 @@ export class KeywordsController {
 
   @Post('ai-suggest-new')
   @ApiOperation({ summary: "Suggest expansions for a new word without saving" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   @ApiBody({ schema: { properties: { word: { type: "string" } } } })
   async aiSuggestNew(@Body() body: { word: string }) {
@@ -117,7 +140,10 @@ export class KeywordsController {
 
   @Put('expansions/:id/approve')
   @ApiOperation({ summary: "Approve and save expansions" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   async approveExpansion(@Param('id') id: string, @Body() body: { expansions: string[] }) {
     const data = await this.keywordsService.approveExpansion(id, body.expansions);
@@ -126,7 +152,10 @@ export class KeywordsController {
 
   @Put('expansions/:id/reject')
   @ApiOperation({ summary: "Reject a keyword expansion" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions('keywords:manage')
   async rejectExpansion(@Param('id') id: string) {
     const data = await this.keywordsService.rejectExpansion(id);

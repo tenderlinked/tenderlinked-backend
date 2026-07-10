@@ -3,19 +3,7 @@ import { ScrapeResult, ScrapeStatus } from "./types";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { SessionService } from "./session.service";
-
-function parseAmount(valStr?: string | null): number | null {
-  if (!valStr) return null;
-  const s = valStr.trim().toLowerCase();
-  if (s === 'na' || s === 'not applicable') return null;
-  let multiplier = 1;
-  if (s.includes('lac') || s.includes('lakh')) multiplier = 100000;
-  if (s.includes('cr') || s.includes('crore')) multiplier = 10000000;
-  const cleanStr = s.replace(/[^0-9.]/g, '');
-  const amount = parseFloat(cleanStr);
-  if (isNaN(amount)) return null;
-  return amount * multiplier;
-}
+import { cleanCityName, parseAmount } from "./utils";
 
 function toTitleCase(str: string | null | undefined): string {
   if (!str) return "";
@@ -353,7 +341,8 @@ export async function scrapeApStateTenders(
                                 } else if (key === 'District') {
                                     updateData.district = val;
                                 } else if (key === 'City') {
-                                    updateData.city = val;
+                                    updateData.city = cleanCityName(val as string);
+                                    updateData.location = val as string;
                                 } else if (key === 'Address') {
                                     updateData.invitingAuthorityAddress = val;
                                 } else if (key === 'Contact Details') {

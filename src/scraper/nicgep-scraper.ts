@@ -6,6 +6,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { ScrapeResult, ScrapeStatus, TenderSchema } from "./types";
 import { randomDelay } from "./queue";
 import { SessionService } from "./session.service";
+import { ScraperTargetsService } from "./scraper-targets.service";
+import { cleanCityName, parseAmount, extractLocationInfo } from "./utils";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -17,22 +19,6 @@ function toTitleCase(str: string | null | undefined): string {
   return str.replace(/\w\S*/g, function(txt) {
     return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
   });
-}
-
-/**
- * Parse amount strings into numbers
- */
-function parseAmount(valStr?: string | null): number | null {
-  if (!valStr) return null;
-  const s = valStr.trim().toLowerCase();
-  if (s === 'na' || s === 'not applicable') return null;
-  let multiplier = 1;
-  if (s.includes('lac') || s.includes('lakh')) multiplier = 100000;
-  if (s.includes('cr') || s.includes('crore')) multiplier = 10000000;
-  const cleanStr = s.replace(/[^0-9.]/g, '');
-  const amount = parseFloat(cleanStr);
-  if (isNaN(amount)) return null;
-  return amount * multiplier;
 }
 
 /**
@@ -184,25 +170,58 @@ export async function scrapeStateTenders(
     ? baseUrlMatch[1]
     : target.url.split("/nicgep")[0];
 
-  // Resolve Region IDs
-  let regionStateId: string | null = target.regionStateId || null;
-  let regionDistrictId: string | null = target.regionDistrictId || null;
-  
-  if (!regionStateId) {
-    const dbState = await prisma.regionState.findFirst({
-      where: { name: { contains: targetRegion, mode: "insensitive" } }
-    });
-    if (dbState) regionStateId = dbState.id;
-  }
-  
-  if (!regionDistrictId && target.type === 'DISTRICT') {
-    const dbDistrict = await prisma.regionDistrict.findFirst({
-      where: { name: { contains: targetRegion, mode: "insensitive" } }
-    });
-    if (dbDistrict) regionDistrictId = dbDistrict.id;
-  }
+  const scrapeLog = await prisma.scrapeLog.create({
+    data: {
+      targetId: target.id,
+      targetRegion: target.name,
+      status: "RUNNING",
+      tendersFound: 0,
+      source,
+    },
+  });
 
   try {
+    // Resolve Region IDs
+    let regionStateId: string | null = target.regionStateId || null;
+    let regionDistrictId: string | null = target.regionDistrictId || null;
+    
+    if (!regionStateId) {
+      const dbState = await prisma.regionState.findFirst({
+        where: { name: { contains: targetRegion, mode: "insensitive" } }
+      });
+      if (dbState) {
+        regionStateId = dbState.id;
+      }
+    }
+    
+    // Cache org mappings for this state
+    const stateMappings = await prisma.organisationMapping.findMany({
+      where: { state: targetRegion }
+    });
+    const orgMap = new Map<string, string | null>();
+    stateMappings.forEach(m => {
+      if (m.isMapped && m.normalizedName) {
+        orgMap.set(m.rawName, m.normalizedName);
+      } else {
+        orgMap.set(m.rawName, null);
+      }
+    });
+    
+    if (!regionDistrictId && target.type === 'DISTRICT') {
+      const dbDistrict = await prisma.regionDistrict.findFirst({
+        where: { name: { contains: targetRegion, mode: "insensitive" } }
+      });
+      if (dbDistrict) regionDistrictId = dbDistrict.id;
+    }
+
+    let allDistrictsForState: {id: string, name: string}[] = [];
+    if (regionStateId) {
+      allDistrictsForState = await prisma.regionDistrict.findMany({
+        where: { stateId: regionStateId },
+        select: { id: true, name: true }
+      });
+    }
+
     console.log(
       `[NICGEP] Fetching valid session for ${target.name} via SessionService...`
     );
@@ -237,6 +256,10 @@ export async function scrapeStateTenders(
       console.log(
         "[NICGEP] No rows found. Session might be invalid or table empty."
       );
+      await prisma.scrapeLog.update({
+        where: { id: scrapeLog.id },
+        data: { status: "FAILED", error: "No rows found" }
+      });
       return { district: targetRegion, success: false, tenders: [] };
     }
 
@@ -244,6 +267,7 @@ export async function scrapeStateTenders(
     const allValidTenders: any[] = [];
 
     const limitCount = source === "TEST" ? 10 : rows.length;
+    let retryCount = 0;
     for (let i = 0; i < limitCount; i++) {
       let currentStatus = getStatus();
       if (currentStatus === "STOPPED") {
@@ -387,6 +411,20 @@ export async function scrapeStateTenders(
             }
           });
 
+          // ── Fallback: Parse all 2 or 4 column property tables ──────────
+          $d("table tr").each((_idx, tr) => {
+            const tds = $d(tr).find("> td, > th");
+            if (tds.length === 2 || tds.length === 4) {
+              for (let i = 0; i < tds.length; i += 2) {
+                const key = $d(tds[i]).text().replace(/\s+/g, " ").trim();
+                const val = $d(tds[i + 1]).text().replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+                if (key && val && key.length < 50 && !detailData[key]) {
+                  detailData[key] = val;
+                }
+              }
+            }
+          });
+
           // ── Extract document PDF links ──────────────────────────────
           $d("table a").each((_i, el) => {
             const linkHref = $d(el).attr("href") || "";
@@ -485,13 +523,45 @@ export async function scrapeStateTenders(
 
       // ── Map all extracted fields ─────────────────────────────────────
       const d = detailData;
+      console.log(`[DEBUG NICGEP KEYS] Extracted keys for ${cleanTitle}:`, Object.keys(d));
+
+      const findKeyByRegex = (regex: RegExp): string | undefined => {
+        for (const k of Object.keys(d)) {
+          if (regex.test(k)) return d[k];
+        }
+        return undefined;
+      };
 
       // Extract Authority/District
-      let finalOrgName = (norm(d["Organisation Chain"]) || targetRegion).split('||')[0].trim();
-      if (finalOrgName.match(/^CE RW\s*(I|II|III|IV)?$/i)) {
-        finalOrgName = "Chief Engineer Rural Works";
+      let rawOrgName = (norm(d["Organisation Chain"]) || targetRegion).split('||')[0].trim();
+      let finalOrgName = rawOrgName;
+
+      // Handle mapping logic
+      if (orgMap.has(rawOrgName)) {
+        const mappedName = orgMap.get(rawOrgName);
+        if (mappedName) {
+          finalOrgName = mappedName;
+        } else {
+          finalOrgName = toTitleCase(rawOrgName);
+        }
+      } else {
+        // If not seen before, upsert to DB for admin to map later, and use raw (TitleCased) for now
+        finalOrgName = toTitleCase(rawOrgName);
+        try {
+          await prisma.organisationMapping.upsert({
+            where: { rawName: rawOrgName },
+            update: {},
+            create: {
+              rawName: rawOrgName,
+              state: targetRegion,
+              isMapped: false
+            }
+          });
+          orgMap.set(rawOrgName, null); // cache so we don't upsert again this run
+        } catch (e) {
+          console.error(`[NICGEP] Failed to auto-save unmapped org ${rawOrgName}:`, e);
+        }
       }
-      finalOrgName = toTitleCase(finalOrgName);
 
       // Work description / main description
       const workDesc = norm(d["Work Description"]);
@@ -515,6 +585,10 @@ export async function scrapeStateTenders(
       const finalEndDate =
         bidSubmissionEnd || parseNicgepDate(closingDateStr) || new Date();
 
+      const rawLocation = toTitleCase(norm(findKeyByRegex(/^Location/i)));
+      const rawPincode = norm(findKeyByRegex(/^Pincode/i));
+      const locationInfo = extractLocationInfo(rawLocation, allDistrictsForState, rawPincode);
+
       const tenderObj = {
         // Core
         district: finalOrgName,
@@ -527,14 +601,15 @@ export async function scrapeStateTenders(
         tenderPdfUrl: tenderPdfUrl || null,
 
         // Financial
-        emd: norm(d["EMD Amount in \u20b9"]) || norm(d["EMD Amount in Rs."]) || norm(d["EMD Amount in ₹"]),
-        tenderValue: norm(d["Tender Value in \u20b9"]) || norm(d["Tender Value in Rs."]) || norm(d["Tender Value in ₹"]),
-        tenderAmount: parseAmount(norm(d["Tender Value in \u20b9"]) || norm(d["Tender Value in Rs."]) || norm(d["Tender Value in ₹"])),
-        applicationCost: norm(d["Tender Fee in \u20b9"]) || norm(d["Tender Fee in Rs."]) || norm(d["Tender Fee in ₹"]),
+        emd: norm(findKeyByRegex(/EMD Amount/i)),
+        tenderValue: norm(findKeyByRegex(/Tender Value/i)),
+        tenderAmount: parseAmount(norm(findKeyByRegex(/Tender Value/i))),
+        applicationCost: norm(findKeyByRegex(/Tender Fee/i)),
 
         // Location
-        city: toTitleCase(norm(d["Location"])),
-        pincode: norm(d["Pincode"]),
+        city: locationInfo.city,
+        location: rawLocation,
+        pincode: rawPincode,
 
         // Basic Details
         tenderId: norm(d["Tender ID"]),
@@ -625,7 +700,7 @@ export async function scrapeStateTenders(
               // Update sourceUrl to latest real URL in case session changed
               sourceUrl: detailUrl,
               regionStateId: regionStateId,
-              regionDistrictId: regionDistrictId,
+              regionDistrictId: locationInfo.regionDistrictId || regionDistrictId,
               startDate: validData.startDate,
               endDate: validData.endDate,
               emd: validData.emd,
@@ -633,6 +708,8 @@ export async function scrapeStateTenders(
               tenderAmount: validData.tenderAmount,
               applicationCost: validData.applicationCost,
               city: validData.city,
+              district: locationInfo.district,
+              location: validData.location,
               pincode: validData.pincode,
               tenderId: validData.tenderId,
               tenderRefNumber: validData.tenderRefNumber,
@@ -684,7 +761,7 @@ export async function scrapeStateTenders(
             create: {
               state: targetRegion,
               regionStateId: regionStateId,
-              regionDistrictId: regionDistrictId,
+              regionDistrictId: locationInfo.regionDistrictId || regionDistrictId,
               level: "STATE",
               organisation: validData.district, // ValidData.district contains the orgName
               title: validData.title,
@@ -699,9 +776,12 @@ export async function scrapeStateTenders(
               emd: validData.emd,
               tenderValue: validData.tenderValue,
               applicationCost: validData.applicationCost,
+              tenderAmount: validData.tenderAmount,
 
               // Location
               city: validData.city,
+              district: locationInfo.district,
+              location: validData.location,
               pincode: validData.pincode,
 
               // Basic Details
@@ -800,8 +880,21 @@ export async function scrapeStateTenders(
 
           newTendersCount++;
           if (onProgress) onProgress(1, 1);
-        } catch (dbError) {
+          retryCount = 0; // reset on success
+        } catch (dbError: any) {
           console.error(`[DB Error NICGEP]`, dbError);
+          const errMsg = String(dbError.message || dbError);
+          // If ZodError or Session error occurs, it's likely an expired session page
+          if (errMsg.includes("Session") || dbError.name === "ZodError" || Object.keys(detailData).length === 0) {
+            retryCount++;
+            if (retryCount <= 3) {
+              console.log(`[NICGEP] Retrying tender ${i} (Attempt ${retryCount}/3). Refreshing session...`);
+              await sessionService.getValidSessionCookie(baseUrl, true);
+              i--; // Retry the current tender index
+              continue;
+            }
+          }
+          retryCount = 0; // Move to next tender if max retries exceeded
         }
       } else {
         if (onProgress && validData) onProgress(1, 0);

@@ -9,8 +9,10 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Req,
+  Res,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
+import type { Response } from "express";
+import { ApiTags, ApiOperation, ApiQuery, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { TendersService } from "./tenders.service";
 import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
@@ -19,7 +21,6 @@ import { CreateTenderDto } from "./dto/create-tender.dto";
 import { UpdateTenderDto } from "./dto/update-tender.dto";
 
 @ApiTags("Tenders")
-@ApiBearerAuth()
 @Controller("tenders")
 export class TendersController {
   constructor(private readonly tendersService: TendersService) {}
@@ -28,7 +29,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Get a paginated list of tenders" })
-  @ApiQuery({ name: "district", required: false, description: "Filter by district" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiQuery({ name: "district", required: false, description: "Filter by district" })
   @ApiQuery({ name: "search", required: false, description: "Search term" })
   @ApiQuery({ name: "active", required: false, description: "Filter by active status (true/false/expiring)" })
   @ApiQuery({ name: "priority", required: false, description: "Filter by priority (HIGH)" })
@@ -120,7 +124,10 @@ export class TendersController {
 
   @Get('autocomplete')
   @ApiOperation({ summary: "Get autocomplete suggestions for global search" })
-  @ApiQuery({ name: "q", required: true, description: "Search query" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiQuery({ name: "q", required: true, description: "Search query" })
   async autocomplete(@Query("q") q: string) {
     return this.tendersService.autocomplete(q);
   }
@@ -129,7 +136,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Get sidebar stats: states, cities, and keywords with tender counts" })
-  async getSidebarStats() {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getSidebarStats() {
     return this.tendersService.getSidebarStats();
   }
 
@@ -137,7 +147,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Get a list of distinct authorities (organisations) for a state" })
-  @ApiQuery({ name: "state", required: false, description: "Filter by state" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiQuery({ name: "state", required: false, description: "Filter by state" })
   async getAuthorities(@Query("state") state?: string) {
     return this.tendersService.getAuthorities(state);
   }
@@ -146,7 +159,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Get a specific tender by ID" })
-  async getTenderById(
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getTenderById(
     @Param('id') id: string,
     @Req() req?: any
   ) {
@@ -178,11 +194,56 @@ export class TendersController {
     }
   }
 
+  @Get(':id/documents')
+  @ApiOperation({ summary: "Get downloaded documents for a specific tender" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getTenderDocuments(
+    @Param('id') id: string
+  ) {
+    try {
+      const documents = await this.tendersService.getTenderDocuments(id);
+      return { success: true, data: documents };
+    } catch (error: any) {
+      console.error(`[GET /tenders/${id}/documents] Error:`, error);
+      throw new InternalServerErrorException({
+        error: "Internal Server Error",
+        details: error?.message || String(error),
+      });
+    }
+  }
+
+  @Get(':id/download-all')
+  @ApiOperation({ summary: "Download all documents as a zip file" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async downloadAllDocuments(
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    try {
+      await this.tendersService.downloadAllDocuments(id, res);
+    } catch (error: any) {
+      console.error(`[GET /tenders/${id}/download-all] Error:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: "Internal Server Error",
+          details: error?.message || String(error),
+        });
+      }
+    }
+  }
+
   @Patch(":id/bookmark")
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Update bookmark status of a tender" })
-  @ApiBody({ schema: { properties: { isBookmarked: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { isBookmarked: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateBookmark(
     @Param("id") id: string,
     @Body() body: { isBookmarked: boolean; isState?: boolean }
@@ -207,7 +268,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: "Update applied status of a tender" })
-  @ApiBody({ schema: { properties: { isApplied: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { isApplied: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateApplied(
     @Param("id") id: string,
     @Body() body: { isApplied: boolean; isState?: boolean }
@@ -232,7 +296,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('settings:manage')
   @ApiOperation({ summary: "Retry AI processing for a tender" })
-  @ApiQuery({ name: "state", required: false, description: "Is this a state tender (true)" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiQuery({ name: "state", required: false, description: "Is this a state tender (true)" })
   async retryAi(
     @Param("id") id: string,
     @Query("state") state?: string
@@ -254,7 +321,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:write')
   @ApiOperation({ summary: 'Create a new Tender (Super‑Admin or tenant member granted permission)' })
-  @ApiBody({ type: CreateTenderDto })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ type: CreateTenderDto })
   async create(@Body() dto: CreateTenderDto) {
     try {
       return await this.tendersService.createTender(dto);
@@ -271,7 +341,10 @@ export class TendersController {
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:write')
   @ApiOperation({ summary: 'Update an existing Tender (Super‑Admin or tenant member granted permission)' })
-  @ApiBody({ type: UpdateTenderDto })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ type: UpdateTenderDto })
   async update(@Param('id') id: string, @Body() dto: UpdateTenderDto) {
     if (Object.keys(dto).length === 0) {
       throw new BadRequestException('No fields provided for update');

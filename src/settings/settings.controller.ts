@@ -5,13 +5,12 @@ import {
   Body,
   InternalServerErrorException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { SettingsService } from "./settings.service";
 import { UseGuards } from "@nestjs/common";
 import { SuperAdminGuard } from "../auth/guards/super-admin.guard";
 
 @ApiTags("Settings")
-@ApiBearerAuth()
 @Controller("settings")
 @UseGuards(SuperAdminGuard)
 export class SettingsController {
@@ -19,7 +18,10 @@ export class SettingsController {
 
   @Get()
   @ApiOperation({ summary: "Get system settings (scrape interval)" })
-  async getSettings() {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getSettings() {
     try {
       return await this.settingsService.getSettings();
     } catch (error: any) {
@@ -30,7 +32,10 @@ export class SettingsController {
 
   @Post()
   @ApiOperation({ summary: "Update system settings" })
-  @ApiBody({ schema: { properties: { scrapeIntervalHours: { type: "number", description: "Interval in hours between scrapes" } } } })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { scrapeIntervalHours: { type: "number", description: "Interval in hours between scrapes" } } } })
   async updateSettings(@Body() body: { scrapeIntervalHours?: number }) {
     try {
       return await this.settingsService.updateSettings(body);

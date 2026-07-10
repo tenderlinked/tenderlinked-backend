@@ -6,7 +6,7 @@ import {
   InternalServerErrorException,
 } from "@nestjs/common";
 import type { Request } from "express";
-import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { CronService } from "./cron.service";
 
 @ApiTags("Cron")
@@ -16,8 +16,10 @@ export class CronController {
 
   @Get("status")
   @ApiOperation({ summary: "Check cron status to see if scrape should run" })
-  @ApiBearerAuth("cron-secret")
-  async getStatus(@Req() req: Request) {
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getStatus(@Req() req: Request) {
     const authHeader = req.headers["authorization"];
     const cronSecret = process.env.CRON_SECRET;
 

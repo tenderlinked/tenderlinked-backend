@@ -11,13 +11,13 @@ import {
 } from "@nestjs/common";
 import { ScrapeStatus } from "./types";
 import type { Request } from "express";
-import { ApiTags, ApiOperation, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
+import { ApiTags, ApiOperation, ApiBody, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { ScraperService } from "./scraper.service";
 import { TenantRoleGuard } from "../auth/guards/tenant-role.guard";
 import { RequirePermissions } from "../auth/decorators/permissions.decorator";
+import { lookupPincode } from "./utils";
 
 @ApiTags("Scraper")
-@ApiBearerAuth()
 @Controller("scrape")
 export class ScraperController {
   constructor(private readonly scraperService: ScraperService) {}
@@ -25,8 +25,10 @@ export class ScraperController {
   @Post()
   @HttpCode(200)
   @ApiOperation({ summary: "Trigger manual scrape" })
-  @ApiBearerAuth("cron-secret")
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
   @ApiBody({ schema: { properties: { targetIds: { type: "array", items: { type: "string" }, description: "Optional array of target IDs" } } } })
   async scrape(
@@ -58,8 +60,10 @@ export class ScraperController {
   @Post("stop")
   @HttpCode(200)
   @ApiOperation({ summary: "Stop all current scrape operations" })
-  @ApiBearerAuth("cron-secret")
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
   async stopScrape(@Req() req: Request) {
     this.scraperService.stopScrape();
@@ -68,7 +72,10 @@ export class ScraperController {
 
   @Get("instances")
   @ApiOperation({ summary: "Get all active scraper instances" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
   async getInstances() {
     return await this.scraperService.getInstances();
@@ -77,7 +84,10 @@ export class ScraperController {
   @Post("instances/:id/status")
   @HttpCode(200)
   @ApiOperation({ summary: "Update status of a specific instance" })
-  @UseGuards(TenantRoleGuard)
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
   async updateInstanceStatus(
     @Param("id") id: string,
@@ -85,5 +95,20 @@ export class ScraperController {
   ) {
     this.scraperService.updateInstanceStatus(id, body.status);
     return { success: true };
+  }
+
+  @Get("pincode/:pincode")
+  @ApiOperation({ summary: "Lookup Indian Pincode details" })
+  @ApiParam({ name: "pincode", description: "6 digit Indian pincode (e.g. 400070)", type: "string" })
+  @ApiResponse({ status: 200, description: 'Returns array of matching post offices' })
+  async checkPincode(@Param("pincode") pincode: string) {
+    if (!pincode || pincode.length !== 6) {
+      throw new BadRequestException("Pincode must be exactly 6 digits");
+    }
+    const results = lookupPincode(pincode);
+    if (!results || results.length === 0) {
+      return { success: false, message: "No data found for this pincode", data: [] };
+    }
+    return { success: true, data: results };
   }
 }

@@ -125,15 +125,28 @@ export class PaymentsService {
 
   async createSubscriptionAfterSuccess(
     userId: string,
-    planType: string,
+    planIdOrName: string,
     paymentMethod: string,
     paymentId: string,
     amount: number,
     isTrial: boolean = false
   ) {
+    // Attempt to resolve planIdOrName against the PricingPlan table
+    let plan = await this.prisma.pricingPlan.findUnique({
+      where: { id: planIdOrName }
+    }).catch(() => null);
+
+    if (!plan) {
+      plan = await this.prisma.pricingPlan.findUnique({
+        where: { name: planIdOrName }
+      }).catch(() => null);
+    }
+
+    const actualPlanName = plan ? plan.name : planIdOrName;
+    const normalizedPlan = actualPlanName.toLowerCase();
+
     const startDate = new Date();
     const endDate = new Date();
-    const normalizedPlan = planType.toLowerCase();
 
     if (isTrial) {
       endDate.setDate(endDate.getDate() + 14);
@@ -152,7 +165,7 @@ export class PaymentsService {
     await this.prisma.tenantSubscription.upsert({
       where: { tenantId: tenant.id },
       update: {
-        planType: planType.toUpperCase(),
+        planType: actualPlanName.toUpperCase(),
         status: "ACTIVE",
         startDate,
         endDate,
@@ -162,7 +175,7 @@ export class PaymentsService {
       },
       create: {
         tenantId: tenant.id,
-        planType: planType.toUpperCase(),
+        planType: actualPlanName.toUpperCase(),
         status: "ACTIVE",
         startDate,
         endDate,
@@ -173,26 +186,40 @@ export class PaymentsService {
     });
   }
 
-  async createSubscription(userId: string, planType: string) {
+  async createSubscription(userId: string, planIdOrName: string) {
     if (!this.razorpay) throw new InternalServerErrorException("Razorpay not configured");
 
     const { eligible } = await this.checkTrialEligibility(userId);
 
+    // Attempt to resolve planIdOrName against the PricingPlan table
+    let plan = await this.prisma.pricingPlan.findUnique({
+      where: { id: planIdOrName }
+    }).catch(() => null);
+
+    if (!plan) {
+      plan = await this.prisma.pricingPlan.findUnique({
+        where: { name: planIdOrName }
+      }).catch(() => null);
+    }
+
+    const actualPlanName = plan ? plan.name : planIdOrName;
+    const normalizedPlan = actualPlanName.toLowerCase();
+
     let planId = "";
-    if (planType.toLowerCase() === "basic") {
+    if (normalizedPlan === "basic") {
       planId = "plan_T7u6P0XKteSgsZ";
-    } else if (planType.toLowerCase() === "professional") {
+    } else if (normalizedPlan === "professional") {
       planId = "plan_T7u6PUlcX9Rpfz";
-    } else if (planType.toLowerCase() === "enterprise") {
+    } else if (normalizedPlan === "enterprise") {
       planId = "plan_T7u6RIIempfIcE";
     }
     
     let startAt: number | undefined = undefined;
-    if (eligible && planType.toLowerCase() === "basic") {
+    if (eligible && normalizedPlan === "basic") {
       startAt = Math.floor(Date.now() / 1000) + (3 * 24 * 60 * 60);
     }
 
-    if (!planId) throw new BadRequestException(`Plan ID not configured for ${planType}`);
+    if (!planId) throw new BadRequestException(`Plan ID not configured for ${actualPlanName}`);
 
     try {
       const options: any = {
@@ -201,7 +228,7 @@ export class PaymentsService {
         total_count: 120,
         notes: {
           userId,
-          planType
+          planType: actualPlanName
         }
       };
 

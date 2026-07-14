@@ -165,7 +165,7 @@ export class PaymentsService {
     await this.prisma.tenantSubscription.upsert({
       where: { tenantId: tenant.id },
       update: {
-        planType: actualPlanName.toUpperCase(),
+        planType: actualPlanName,
         status: "ACTIVE",
         startDate,
         endDate,
@@ -175,7 +175,7 @@ export class PaymentsService {
       },
       create: {
         tenantId: tenant.id,
-        planType: actualPlanName.toUpperCase(),
+        planType: actualPlanName,
         status: "ACTIVE",
         startDate,
         endDate,

@@ -74,7 +74,26 @@ export class TenantsController {
     return this.tenantsService.saveAlertPreferencesByTenantId(tenantId, body);
   }
 
+  @Post('setup-preferences')
+  @ApiOperation({ summary: "Save email alert preferences during onboarding (unprotected)" })
+  async setupPreferences(
+    @Body() body: { tenantId: string; keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }
+  ) {
+    return this.tenantsService.saveAlertPreferencesByTenantId(body.tenantId, body);
+  }
+
   // ---- Super Admin Routes (Should use a SuperAdmin guard ideally) ----
+  @Get('admin/dashboard-stats')
+  @ApiOperation({ summary: "Get dashboard stats (Super Admin)" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  @UseGuards(SuperAdminGuard)
+  async getDashboardStats() {
+    return this.tenantsService.getDashboardStats();
+  }
+
   @Get()
   @ApiOperation({ summary: "Get all tenants (Super Admin)" })
   @ApiResponse({ status: 200, description: 'Successful response' })

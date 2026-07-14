@@ -110,6 +110,7 @@ export class SessionService {
     detailPageUrl: string,
     tenderId: string,
     downloadsSubDir?: string,
+    getStatus?: () => string,
   ): Promise<boolean> {
     this.logger.log(`Downloading all documents for ${tenderId} via Puppeteer...`);
 
@@ -218,6 +219,11 @@ export class SessionService {
 
       // ── Step 3: Download each link one by one ──────────────────────
       for (let i = 0; i < docLinks.length; i++) {
+        if (getStatus && getStatus() === 'STOPPED') {
+          this.logger.warn(`[${tenderId}] Scraper stopped. Aborting document downloads.`);
+          break;
+        }
+
         const docLink = docLinks[i];
         this.logger.log(
           `[${tenderId}] (${i + 1}/${docLinks.length}) Downloading ${docLink.type} "${docLink.filename}" id=${docLink.id}`,
@@ -301,7 +307,8 @@ export class SessionService {
         this.logger.log(`[${tenderId}] ✅ Saved locally ${docLink.filename} (${sizeKB} KB)`);
         
         // Upload to S3
-        const s3Key = `tenders/${downloadsSubDir || 'Unknown'}/${tenderId}/${docLink.filename}`;
+        const safeState = (downloadsSubDir || 'Unknown').toLowerCase();
+        const s3Key = `tenderlinked/${safeState}/${tenderId}/${docLink.filename}`;
         await this.s3Service.uploadFile(destPath, s3Key, true); // true = delete after upload
         
         uploadedFiles.push(docLink.filename);
@@ -315,7 +322,7 @@ export class SessionService {
         );
         // Clean up the local tender directory since files are now in S3
         if (fs.existsSync(tenderDir)) {
-          fs.rmdirSync(tenderDir, { recursive: true });
+          fs.rmSync(tenderDir, { recursive: true, force: true });
         }
       } else {
         this.logger.error(`[${tenderId}] No documents were downloaded successfully.`);

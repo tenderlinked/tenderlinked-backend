@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
-import { ConfigModule } from "@nestjs/config";
+
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
 import { ServeStaticModule } from "@nestjs/serve-static";
 import { join } from "path";
@@ -39,6 +40,7 @@ import { AwsModule } from './aws/aws.module';
     }),
     // Global Prisma
     PrismaModule,
+
     // Feature modules
     AwsModule,
     HealthModule,

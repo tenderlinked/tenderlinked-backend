@@ -442,4 +442,52 @@ export class TenantsService {
       }
     });
   }
+  async getDashboardStats() {
+    const totalTenants = await this.prisma.tenant.count();
+    
+    const activeSubs = await this.prisma.tenantSubscription.count({
+      where: {
+        status: 'ACTIVE',
+        planType: {
+          not: 'TRIAL'
+        }
+      }
+    });
+
+    const activeSubscriptions = await this.prisma.tenantSubscription.findMany({
+      where: { status: 'ACTIVE' }
+    });
+
+    let platformMRR = 0;
+    for (const sub of activeSubscriptions) {
+      if (sub.amount) {
+        platformMRR += sub.amount;
+      }
+    }
+
+    const globalTenders = await this.prisma.tender.count();
+
+    // Format numbers
+    const formatNumber = (num: number) => {
+      if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+      if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+      return num.toString();
+    };
+
+    const formatCurrency = (num: number) => {
+      if (num >= 1000000) return '$' + (num / 1000000).toFixed(1) + 'M';
+      if (num >= 1000) return '$' + (num / 1000).toFixed(1) + 'k';
+      return '$' + num.toString();
+    };
+
+    return {
+      totalTenants,
+      totalTenantsFormatted: formatNumber(totalTenants),
+      activeSubs,
+      platformMRR,
+      platformMRRFormatted: formatCurrency(platformMRR),
+      globalTenders,
+      globalTendersFormatted: formatNumber(globalTenders)
+    };
+  }
 }

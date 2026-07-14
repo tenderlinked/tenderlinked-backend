@@ -1,9 +1,10 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService) {}
 
   async createProfile(userId: string, email?: string, phoneNumber?: string, companyName?: string, username?: string, isKeycloakSuperAdmin?: boolean) {
     try {
@@ -42,6 +43,11 @@ export class UsersService {
           roleId: defaultAdminRole?.id || undefined
         },
       });
+
+      // 4. Send Welcome Email asynchronously
+      if (email) {
+        this.emailService.sendWelcomeEmail(email, username || email.split('@')[0]).catch(e => console.error('Failed to send welcome email:', e));
+      }
 
       return {
         ...profile,
@@ -98,33 +104,36 @@ export class UsersService {
         profile = await this.prisma.userProfile.findUnique({ where: { userId } });
       } else if (!member) {
         // User has a profile but no tenant, let's create a default tenant for them
-        const tenantName = `Workspace_${userId.substring(0, 5)}`;
-        const tenant = await this.prisma.tenant.create({
-          data: { name: tenantName },
-        });
-
-        await this.prisma.tenantMember.create({
-          data: { userId, tenantId: tenant.id, role: 'OWNER' },
+        const tenantName = profile.companyName || `Workspace_${userId.substring(0, 5)}`;
+        const tenant = await this.prisma.tenant.create({ data: { name: tenantName } });
+        
+        const defaultAdminRole = await this.prisma.role.findFirst({ where: { isDefaultAdmin: true, isSystemRole: true } });
+        
+        member = await this.prisma.tenantMember.create({
+          data: {
+            userId,
+            tenantId: tenant.id,
+            role: 'OWNER',
+            roleId: defaultAdminRole?.id || undefined
+          },
+          include: { customRole: true, tenant: { include: { subscription: true } } }
         });
       }
-
-      // Re-fetch member after creation
-      member = await this.prisma.tenantMember.findFirst({
-        where: { userId },
-        include: { 
-          customRole: true,
-          tenant: {
-            include: { subscription: true }
-          }
-        }
-      });
     }
-
+    
     return {
       ...profile,
-      tenant: member?.tenant || null,
-      permissions: member?.customRole?.permissions || (member?.role === 'OWNER' ? ['*'] : []),
+      tenant: member?.tenant,
+      role: member?.customRole?.name || member?.role,
+      permissions: member?.customRole?.permissions || (member?.role === 'OWNER' ? ['*'] : [])
     };
+  }
+
+  async updateProfile(userId: string, data: any) {
+    return this.prisma.userProfile.update({
+      where: { userId },
+      data,
+    });
   }
 
   async checkPhone(phoneNumber: string) {

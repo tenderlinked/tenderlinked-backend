@@ -1,9 +1,79 @@
 import { Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
 
 @Injectable()
 export class EmailService {
   private readonly tenantId =
     process.env.AZURE_TENANT_ID || "449ef8af-d2d1-43ec-bdfe-a448d2d2e5a7";
+
+  constructor(private prisma: PrismaService) {}
+
+  private async getGraphAccessToken(): Promise<string | null> {
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      console.warn("MS Graph API credentials not found.");
+      return null;
+    }
+
+    const tokenParams = new URLSearchParams();
+    tokenParams.append("client_id", clientId);
+    tokenParams.append("scope", "https://graph.microsoft.com/.default");
+    tokenParams.append("client_secret", clientSecret);
+    tokenParams.append("grant_type", "client_credentials");
+
+    try {
+      const res = await fetch(
+        `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`,
+        {
+          method: "POST",
+          body: tokenParams,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        }
+      );
+      const data = await res.json();
+      return data.access_token || null;
+    } catch (e) {
+      console.error("Failed to get MS Graph access token:", e);
+      return null;
+    }
+  }
+
+  private async sendGraphEmail(sender: string, toEmail: string, toName: string, subject: string, htmlBody: string): Promise<boolean> {
+    const token = await this.getGraphAccessToken();
+    if (!token) return false;
+
+    const emailPayload = {
+      message: {
+        subject: subject,
+        body: { contentType: "HTML", content: htmlBody },
+        toRecipients: [{ emailAddress: { address: toEmail, name: toName || toEmail } }],
+      },
+      saveToSentItems: "false",
+    };
+
+    try {
+      const mailRes = await fetch(`https://graph.microsoft.com/v1.0/users/${sender}/sendMail`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(emailPayload),
+      });
+
+      if (!mailRes.ok) {
+        const errData = await mailRes.text();
+        console.error("Failed to send email via MS Graph:", errData);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error("Exception sending email:", error);
+      return false;
+    }
+  }
 
   async sendHighPriorityTenderEmail(
     tenders: any[],
@@ -12,41 +82,12 @@ export class EmailService {
     recipientName: string = "Sudhakar",
     isTest: boolean = false
   ) {
-    const clientId = process.env.AZURE_CLIENT_ID;
-    const clientSecret = process.env.AZURE_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      console.warn("MS Graph API credentials not found. Skipping email.");
-      return;
-    }
-
-    if (!tenders || tenders.length === 0) return;
+    const token = await this.getGraphAccessToken();
+    if (!token) return;
 
     try {
-      // 1. Get Token
-      const tokenParams = new URLSearchParams();
-      tokenParams.append("client_id", clientId);
-      tokenParams.append("scope", "https://graph.microsoft.com/.default");
-      tokenParams.append("client_secret", clientSecret);
-      tokenParams.append("grant_type", "client_credentials");
-
-      const tokenRes = await fetch(
-        `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`,
-        {
-          method: "POST",
-          body: tokenParams,
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        }
-      );
-
-      const tokenData = await tokenRes.json();
-      if (!tokenData.access_token) {
-        console.error("Failed to get MS Graph access token:", tokenData);
-        return;
-      }
-
       // 2. Build Email HTML
-      const sender = "mis@enfycon.com";
+      const sender = "sahadeb@enfycon.com";
 
       const tendersHtml = `
         <div class="table-container" style="overflow-x: auto;">
@@ -151,32 +192,53 @@ export class EmailService {
           ? `Enfycon Alert: High-Priority ${tenderType === "Mixed" ? "" : tenderType + " "}Tender - ${tenders[0].title.replace(/[\[\]]/g, "").trim().substring(0, 40)}...`
           : `Enfycon Alert: ${tenders.length} New High-Priority ${tenderType === "Mixed" ? "" : tenderType + " "}Tenders`;
 
-      const emailPayload = {
-        message: {
-          subject: subjectText,
-          body: { contentType: "HTML", content: emailHtml },
-          toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
-        },
-        saveToSentItems: "false",
-      };
-
-      const mailRes = await fetch(`https://graph.microsoft.com/v1.0/users/${sender}/sendMail`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(emailPayload),
-      });
-
-      if (!mailRes.ok) {
-        const errData = await mailRes.text();
-        console.error("Failed to send email via MS Graph:", errData);
-      } else {
+      const mailSent = await this.sendGraphEmail(sender, recipientEmail, recipientName, subjectText, emailHtml);
+      if (mailSent) {
         console.log(`High priority tender email sent to ${recipientEmail}`);
       }
     } catch (error) {
-      console.error("Exception sending email:", error);
+      console.error("Exception in tender email preparation:", error);
+    }
+  }
+
+  async sendWelcomeEmail(recipientEmail: string, recipientName: string) {
+    const sender = "sahadeb@enfycon.com";
+    const subject = "Welcome to TenderLinked!";
+    const htmlBody = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4361ee;">Welcome to TenderLinked, ${recipientName || 'User'}!</h2>
+        <p>Thank you for creating an account with TenderLinked. We are thrilled to have you on board.</p>
+        <p>You can now log in to your dashboard to start setting up your keywords and receiving daily tender alerts.</p>
+        <a href="https://tenders.enfycon.com/login" style="display: inline-block; background-color: #4361ee; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 10px;">Login to Dashboard</a>
+        <p style="margin-top: 30px; font-size: 12px; color: #888;">If you did not request this, please ignore this email.</p>
+      </div>
+    `;
+
+    const success = await this.sendGraphEmail(sender, recipientEmail, recipientName, subject, htmlBody);
+    if (success) {
+      console.log(`Welcome email sent to ${recipientEmail}`);
+    }
+  }
+
+  async sendPasswordResetOtp(recipientEmail: string, otp: string) {
+    const sender = "sahadeb@enfycon.com";
+    const subject = "Your Password Reset OTP - TenderLinked";
+    const htmlBody = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #4361ee;">Password Reset Request</h2>
+        <p>We received a request to reset your password for your TenderLinked account.</p>
+        <p>Your One-Time Password (OTP) is:</p>
+        <div style="font-size: 24px; font-weight: bold; padding: 15px; background-color: #f3f4f6; text-align: center; border-radius: 5px; letter-spacing: 5px; color: #111827;">
+          ${otp}
+        </div>
+        <p style="margin-top: 20px;">This OTP will expire in 10 minutes.</p>
+        <p style="margin-top: 30px; font-size: 12px; color: #888;">If you did not request this, please ignore this email and your password will remain unchanged.</p>
+      </div>
+    `;
+
+    const success = await this.sendGraphEmail(sender, recipientEmail, recipientEmail, subject, htmlBody);
+    if (success) {
+      console.log(`Password reset OTP sent to ${recipientEmail}`);
     }
   }
 }

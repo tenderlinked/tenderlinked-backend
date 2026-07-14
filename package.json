@@ -25,6 +25,7 @@
     "@aws-sdk/client-s3": "^3.1084.0",
     "@aws-sdk/s3-request-presigner": "^3.1084.0",
     "@google/genai": "^2.10.0",
+    "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -38,6 +39,7 @@
     "adm-zip": "^0.5.18",
     "archiver": "^8.0.0",
     "axios": "^1.17.0",
+    "bullmq": "^5.80.2",
     "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -58,6 +60,7 @@
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^14.0.1",
+    "xlsx": "^0.18.5",
     "zod": "^3.25.3"
   },
   "devDependencies": {

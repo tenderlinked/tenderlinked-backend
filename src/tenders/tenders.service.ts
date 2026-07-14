@@ -1,4 +1,6 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
+import puppeteer from 'puppeteer';
+import { generateAiSummaryHtml, AiSummaryData } from '../queue/templates/ai-summary.template';
 import { PrismaService } from "../prisma/prisma.service";
 import { redactTenderBasedOnPlan } from "../common/utils/content-gating.util";
 import { CreateTenderDto } from "./dto/create-tender.dto";
@@ -7,14 +9,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import archiver = require('archiver');
 import { Response } from "express";
-
 import { S3Service } from "../aws/s3.service";
+import { BoqProcessorService } from "../queue/boq.processor";
 
 @Injectable()
 export class TendersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
+    private readonly boqProcessorService: BoqProcessorService
   ) {}
 
   async getTenders(params: {
@@ -267,13 +270,42 @@ export class TendersService {
     return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
   }
 
-  async getTenderDocuments(id: string): Promise<string[]> {
+  async getTenderDocuments(id: string, userId: string | null = null): Promise<{url: string, size: number}[]> {
     const tender = await this.prisma.tender.findUnique({
       where: { id },
       select: { tenderCode: true, id: true, documentsDownloaded: true, state: true }
     });
     
     if (!tender || !tender.documentsDownloaded) return [];
+
+    let isUnlockedWithCredit = false;
+    let allowedFields: string[] = [];
+
+    if (userId) {
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { userId },
+        include: { tenant: { include: { subscription: true } } }
+      });
+
+      if (member?.tenant?.id) {
+        const unlock = await this.prisma.tenantUnlockedTender.findFirst({
+          where: { tenantId: member.tenant.id, tenderId: id }
+        });
+        if (unlock) isUnlockedWithCredit = true;
+      }
+
+      if (member?.tenant?.subscription?.planType) {
+        const plan = await this.prisma.pricingPlan.findUnique({
+          where: { name: member.tenant.subscription.planType }
+        });
+        if (plan) allowedFields = plan.allowedTenderFields;
+      }
+    }
+
+    if (!allowedFields.includes('noticePdfUrl') && !isUnlockedWithCredit) {
+      // User is not allowed to download/view the documents without a credit
+      return [];
+    }
 
     const tenderIdPath = tender.tenderCode || tender.id;
     
@@ -292,17 +324,20 @@ export class TendersService {
       `downloads/${stateLC}/${tenderIdPath}/`
     ];
 
-    let s3Keys: string[] = [];
+    let s3Objects: { key: string, size: number }[] = [];
     for (const prefix of possiblePrefixes) {
-      s3Keys = await this.s3Service.listObjects(prefix);
-      if (s3Keys.length > 0) break;
+      s3Objects = await this.s3Service.listObjectsWithMetadata(prefix);
+      if (s3Objects.length > 0) break;
     }
     
-    if (s3Keys.length === 0) return [];
+    if (s3Objects.length === 0) return [];
     
     // Generate presigned URLs for each key
-    const urls = await Promise.all(s3Keys.map(key => this.s3Service.getPresignedUrl(key)));
-    return urls;
+    const docs = await Promise.all(s3Objects.map(async obj => {
+      const url = await this.s3Service.getPresignedUrl(obj.key);
+      return { url, size: obj.size };
+    }));
+    return docs;
   }
 
   async downloadAllDocuments(id: string, res: Response): Promise<void> {
@@ -388,10 +423,131 @@ export class TendersService {
   }
 
   async retryAi(id: string, isState: boolean) {
-    return this.prisma.tender.update({
+    const updated = await this.prisma.tender.update({
       where: { id },
-      data: { aiProcessed: false, aiError: null },
+      data: { aiProcessed: true, aiError: 'Processing in background' },
     });
+    // Run the processor asynchronously without awaiting
+    this.boqProcessorService.processTender(id).catch(err => {
+      console.error(`[BoqProcessorService] Failed to process tender ${id}:`, err);
+    });
+    return updated;
+  }
+
+  async getAiSummaryPdf(id: string): Promise<Buffer> {
+    const tender = await this.prisma.tender.findUnique({
+      where: { id },
+      include: { boq: true }
+    });
+
+    if (!tender) {
+      throw new NotFoundException("Tender not found");
+    }
+
+    if (!tender.aiSummary) {
+      throw new InternalServerErrorException("AI Summary is not generated yet for this tender");
+    }
+
+    const aiData: AiSummaryData = {
+      authorityName: tender.invitingAuthorityName || 'N/A',
+      tdrNumber: tender.tenderId || tender.tenderCode || 'N/A',
+      location: tender.location || tender.city || 'N/A',
+      tenderValue: tender.tenderValue ? tender.tenderValue.toString() : 'N/A',
+      emd: tender.emd ? tender.emd.toString() : 'N/A',
+      tenderFee: tender.applicationCost || 'N/A',
+      submissionDate: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A',
+      contractPeriod: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A',
+      workDescription: tender.title || 'N/A',
+      scopeOfWork: tender.aiSummary ? tender.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
+      keyDates: [
+        { label: 'Start Date', value: tender.publishedDate ? new Date(tender.publishedDate).toLocaleDateString() : 'N/A' },
+        { label: 'Bid Submission Date', value: tender.docDownloadEndDate ? new Date(tender.docDownloadEndDate).toLocaleDateString() : 'N/A' },
+        { label: 'Bid Opening Date', value: tender.bidOpeningDate ? new Date(tender.bidOpeningDate).toLocaleDateString() : 'N/A' },
+        { label: 'Closing Date', value: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A' },
+        { label: 'Contract Period', value: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A' }
+      ],
+      locationAndContact: [
+        { label: 'City', value: tender.city || 'N/A' },
+        { label: 'State', value: tender.state || 'N/A' },
+        { label: 'Pincode', value: tender.pincode || 'N/A' },
+        { label: 'Address', value: tender.invitingAuthorityAddress || 'N/A' },
+        { label: 'Contact Person', value: tender.invitingAuthorityName || 'N/A' },
+        { label: 'Tender Portal Link', value: tender.sourceUrl || 'N/A' }
+      ],
+      basicDetail: [],
+      finance: [],
+      technicalQualification: [],
+      exemptions: [],
+      documentList: [],
+      boqItems: tender.boq?.boqData as any[] || []
+    };
+
+    const htmlContent = generateAiSummaryHtml(aiData);
+
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+    const page = await browser.newPage();
+    await page.setContent(htmlContent, { waitUntil: 'load' });
+    
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await browser.close();
+
+    return Buffer.from(pdfBuffer);
+  }
+
+  async getAiSummaryHtmlContent(id: string): Promise<string> {
+    const tender = await this.prisma.tender.findUnique({
+      where: { id },
+      include: { boq: true }
+    });
+
+    if (!tender) {
+      throw new NotFoundException("Tender not found");
+    }
+
+    if (!tender.aiSummary) {
+      throw new InternalServerErrorException("AI Summary is not generated yet for this tender");
+    }
+
+    const aiData: AiSummaryData = {
+      authorityName: tender.invitingAuthorityName || 'N/A',
+      tdrNumber: tender.tenderId || tender.tenderCode || 'N/A',
+      location: tender.location || tender.city || 'N/A',
+      tenderValue: tender.tenderValue ? tender.tenderValue.toString() : 'N/A',
+      emd: tender.emd ? tender.emd.toString() : 'N/A',
+      tenderFee: tender.applicationCost || 'N/A',
+      submissionDate: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A',
+      contractPeriod: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A',
+      workDescription: tender.title || 'N/A',
+      scopeOfWork: tender.aiSummary ? tender.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
+      keyDates: [
+        { label: 'Start Date', value: tender.publishedDate ? new Date(tender.publishedDate).toLocaleDateString() : 'N/A' },
+        { label: 'Bid Submission Date', value: tender.docDownloadEndDate ? new Date(tender.docDownloadEndDate).toLocaleDateString() : 'N/A' },
+        { label: 'Bid Opening Date', value: tender.bidOpeningDate ? new Date(tender.bidOpeningDate).toLocaleDateString() : 'N/A' },
+        { label: 'Closing Date', value: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A' },
+        { label: 'Contract Period', value: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A' }
+      ],
+      locationAndContact: [
+        { label: 'City', value: tender.city || 'N/A' },
+        { label: 'State', value: tender.state || 'N/A' },
+        { label: 'Pincode', value: tender.pincode || 'N/A' },
+        { label: 'Address', value: tender.invitingAuthorityAddress || 'N/A' },
+        { label: 'Contact Person', value: tender.invitingAuthorityName || 'N/A' },
+        { label: 'Tender Portal Link', value: tender.sourceUrl || 'N/A' }
+      ],
+      basicDetail: [],
+      finance: [],
+      technicalQualification: [],
+      exemptions: [],
+      documentList: [],
+      boqItems: tender.boq?.boqData as any[] || []
+    };
+
+    return generateAiSummaryHtml(aiData);
   }
 
   async createTender(dto: CreateTenderDto) {
@@ -481,6 +637,28 @@ export class TendersService {
     const cities = aggregateCounts(rawCities).slice(0, 30); // keep max 30 after aggregation
 
     return { states, cities, keywords };
+  }
+
+  async getFiltersAggregate() {
+    const stats = await this.getSidebarStats();
+    const now = new Date();
+    const [under10L, tenTo50L, fiftyLTo1Cr, above1Cr] = await Promise.all([
+      this.prisma.tender.count({ where: { endDate: { gte: now }, tenderAmount: { lt: 1000000 } } }),
+      this.prisma.tender.count({ where: { endDate: { gte: now }, tenderAmount: { gte: 1000000, lt: 5000000 } } }),
+      this.prisma.tender.count({ where: { endDate: { gte: now }, tenderAmount: { gte: 5000000, lt: 10000000 } } }),
+      this.prisma.tender.count({ where: { endDate: { gte: now }, tenderAmount: { gte: 10000000 } } })
+    ]);
+
+    return {
+      keywords: stats.keywords.map(k => ({ name: k.keyword, count: k.count })),
+      states: stats.states,
+      tenderValues: [
+        { name: "Under 10 Lakhs", count: under10L },
+        { name: "10 - 50 Lakhs", count: tenTo50L },
+        { name: "50 Lakhs - 1 Crore", count: fiftyLTo1Cr },
+        { name: "Above 1 Crore", count: above1Cr }
+      ]
+    };
   }
 
   async autocomplete(q: string) {

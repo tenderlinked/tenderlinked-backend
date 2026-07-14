@@ -26,6 +26,7 @@ export class PlansController {
     hasEmailAlerts?: boolean;
     hasWhatsappAlerts?: boolean;
     hasSmsAlerts?: boolean;
+    freeRedownloads?: number;
   }) {
     return this.plansService.create(createPlanDto);
   }
@@ -67,6 +68,7 @@ export class PlansController {
     hasEmailAlerts?: boolean;
     hasWhatsappAlerts?: boolean;
     hasSmsAlerts?: boolean;
+    freeRedownloads?: number;
   }) {
     return this.plansService.update(id, updatePlanDto);
   }

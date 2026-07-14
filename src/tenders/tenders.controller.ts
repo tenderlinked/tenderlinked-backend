@@ -19,11 +19,15 @@ import { RequirePermissions } from "../auth/decorators/permissions.decorator";
 import { UseGuards } from "@nestjs/common";
 import { CreateTenderDto } from "./dto/create-tender.dto";
 import { UpdateTenderDto } from "./dto/update-tender.dto";
+import { CreditsService } from "../credits/credits.service";
 
 @ApiTags("Tenders")
 @Controller("tenders")
 export class TendersController {
-  constructor(private readonly tendersService: TendersService) {}
+  constructor(
+    private readonly tendersService: TendersService,
+    private readonly creditsService: CreditsService
+  ) {}
 
   @Get()
   @UseGuards(TenantRoleGuard)
@@ -139,8 +143,16 @@ export class TendersController {
   @ApiResponse({ status: 200, description: 'Successful response' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getSidebarStats() {
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async getSidebarStats() {
     return this.tendersService.getSidebarStats();
+  }
+
+  @Get('filters/aggregate')
+  @ApiOperation({ summary: "Get aggregate counts for states, keywords, and tender values" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getFiltersAggregate() {
+    return this.tendersService.getFiltersAggregate();
   }
 
   @Get('authorities')
@@ -200,10 +212,24 @@ export class TendersController {
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 500, description: 'Internal Server Error' })async getTenderDocuments(
-    @Param('id') id: string
+    @Param('id') id: string,
+    @Req() req?: any
   ) {
     try {
-      const documents = await this.tendersService.getTenderDocuments(id);
+      let userId: string | null = null;
+      const authHeader = req?.headers?.['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.split(' ')[1];
+          const payloadBase64 = token.split('.')[1];
+          const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+          userId = decodedPayload.sub;
+        } catch (e) {
+          // Ignore
+        }
+      }
+
+      const documents = await this.tendersService.getTenderDocuments(id, userId);
       return { success: true, data: documents };
     } catch (error: any) {
       console.error(`[GET /tenders/${id}/documents] Error:`, error);
@@ -221,9 +247,33 @@ export class TendersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 500, description: 'Internal Server Error' })async downloadAllDocuments(
     @Param('id') id: string,
-    @Res() res: Response
+    @Res() res: Response,
+    @Query('token') token?: string
   ) {
     try {
+      if (!token) {
+        return res.status(401).json({ error: "Unauthorized. Token required for download." });
+      }
+      let userId: string | null = null;
+      try {
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        userId = decodedPayload.sub;
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token." });
+      }
+
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized." });
+      }
+
+      try {
+        // This will deduct 1 credit if not already unlocked
+        await this.creditsService.unlockTender(userId, id);
+      } catch (e: any) {
+        return res.status(403).json({ error: e.message || "Insufficient credits" });
+      }
+
       await this.tendersService.downloadAllDocuments(id, res);
     } catch (error: any) {
       console.error(`[GET /tenders/${id}/download-all] Error:`, error);
@@ -294,7 +344,6 @@ export class TendersController {
 
   @Patch(":id/retry-ai")
   @UseGuards(TenantRoleGuard)
-  @RequirePermissions('settings:manage')
   @ApiOperation({ summary: "Retry AI processing for a tender" })
   @ApiResponse({ status: 200, description: 'Successful response' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
@@ -311,6 +360,42 @@ export class TendersController {
     } catch (error) {
       console.error("[PATCH /tenders/:id/retry-ai] Error:", error);
       throw new InternalServerErrorException("Internal Server Error");
+    }
+  }
+
+  @Get(":id/ai-summary-pdf")
+  @UseGuards(TenantRoleGuard)
+  @ApiOperation({ summary: "Get AI Summary as PDF" })
+  @ApiResponse({ status: 200, description: 'Returns PDF buffer' })
+  async getAiSummaryPdf(@Param("id") id: string, @Res() res: Response) {
+    try {
+      const pdfBuffer = await this.tendersService.getAiSummaryPdf(id);
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="AI_Tender_Summary_${id.slice(0,8)}.pdf"`,
+        'Content-Length': pdfBuffer.length,
+      });
+      res.send(pdfBuffer);
+    } catch (error: any) {
+      console.error("[GET /tenders/:id/ai-summary-pdf] Error:", error.message);
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
+  @Get(":id/ai-summary-html")
+  @UseGuards(TenantRoleGuard)
+  @ApiOperation({ summary: "Get exact AI Summary HTML" })
+  @ApiResponse({ status: 200, description: 'Returns exact HTML string' })
+  async getAiSummaryHtml(@Param("id") id: string, @Res() res: Response) {
+    try {
+      const htmlString = await this.tendersService.getAiSummaryHtmlContent(id);
+      res.set({
+        'Content-Type': 'text/html',
+      });
+      res.send(htmlString);
+    } catch (error: any) {
+      console.error("[GET /tenders/:id/ai-summary-html] Error:", error.message);
+      throw new InternalServerErrorException(error.message);
     }
   }
 

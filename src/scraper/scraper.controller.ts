@@ -93,7 +93,7 @@ export class ScraperController {
     @Param("id") id: string,
     @Body() body: { status: ScrapeStatus }
   ) {
-    this.scraperService.updateInstanceStatus(id, body.status);
+    await this.scraperService.updateInstanceStatus(id, body.status);
     return { success: true };
   }
 

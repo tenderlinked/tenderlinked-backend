@@ -102,7 +102,7 @@ export async function extractTenderDetailsFromPdf(localPdfPath: string): Promise
           description: "The exact date of bid opening/technical bid opening (e.g. 29-Jun-2026)",
           nullable: true,
         },
-        aiSummary: { type: Type.STRING, description: "1-sentence summary", nullable: true },
+        aiSummary: { type: Type.STRING, description: "A detailed scope of work containing minimum 10 bullet points, each separated by a newline character. Be as detailed as possible.", nullable: true },
         tags: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
@@ -119,7 +119,7 @@ export async function extractTenderDetailsFromPdf(localPdfPath: string): Promise
       2. EMD (Earnest Money Deposit)
       3. Cost of Tender Paper/Document Fee
       4. The exact date when the technical bid will be opened (bid opening date)
-      5. A brief 1-sentence summary of the work
+      5. A detailed Scope of Work. You must provide a minimum of 10 distinct points outlining the work description, specifications, and responsibilities. Format as a single string with each point separated by a newline.
       6. Extract a list of relevant industry tags/keywords (e.g. Software, Hardware, Civil, Solar, Electrical)
       
       Note: The document may be a scanned image. Please read the tables carefully.
@@ -334,4 +334,155 @@ export async function extractTenderDetailsFromText(
     console.error("[Text Extractor] Error:", error);
     throw error;
   }
+}
+
+export async function generateFullAiSummary(
+  pdfBuffer: Buffer,
+  rawText: string | null,
+  mode: 'vision' | 'text'
+): Promise<any> {
+  let apiKey = getNextApiKey();
+  if (!apiKey) throw new Error("No Gemini API key available");
+
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      authorityName: { type: Type.STRING, description: "Name of the organizing authority" },
+      tdrNumber: { type: Type.STRING, description: "Tender number or reference ID" },
+      location: { type: Type.STRING, description: "City and state" },
+      tenderValue: { type: Type.STRING },
+      emd: { type: Type.STRING },
+      tenderFee: { type: Type.STRING },
+      submissionDate: { type: Type.STRING },
+      contractPeriod: { type: Type.STRING },
+      workDescription: { type: Type.STRING, description: "Highly detailed and comprehensive description of the entire work to be done. Include all major components and background context." },
+      scopeOfWork: { 
+        type: Type.ARRAY, 
+        items: { type: Type.STRING },
+        description: "Exhaustive, fully-detailed, itemized list of every single work item, supply, or service mentioned in the scope. Do not omit any technical specifications or components."
+      },
+      keyDates: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            value: { type: Type.STRING }
+          }
+        },
+        description: "MUST include ALL of these date events if present in the document: Publication/Release Date, Document Download Start, Document Download End, Bid Submission Start, Bid Submission End/Close, Bid Opening Date, Pre-Bid Meeting, Corrigendum Date, Work Order Date. Extract the exact date and time values."
+      },
+      locationAndContact: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            value: { type: Type.STRING }
+          }
+        }
+      },
+      basicDetail: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            value: { type: Type.STRING }
+          }
+        }
+      },
+      finance: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            value: { type: Type.STRING }
+          }
+        },
+        description: "MUST include these rows as separate entries if found: Tender/Estimated Value, EMD Amount, EMD Details/Type (Fixed/Percentage), EMD Exemption Criteria, Tender Document Fee, Payment Mode, GST/Tax Info, Performance Security, Retention Money, Payment Terms. Always extract all financial values with their exact amounts and percentages."
+      },
+      technicalQualification: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "MINIMUM 10 points required. Extract every single eligibility criterion, technical requirement, past-experience clause, turnover condition, registration requirement, certification, manpower requirement, equipment requirement, and financial capacity from the entire document. Each requirement should be a separate, self-contained, fully-detailed string. Do not merge multiple requirements into one point."
+      },
+      exemptions: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "All exemptions, relaxations for MSME/Startups, or special clauses."
+      },
+      documentList: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Exhaustive list of every single document, affidavit, and certificate required to be submitted."
+      }
+    },
+    required: [
+      "authorityName", "tdrNumber", "location", "tenderValue", "emd", 
+      "tenderFee", "submissionDate", "contractPeriod", "workDescription", "scopeOfWork",
+      "keyDates", "locationAndContact", "basicDetail", "finance", 
+      "technicalQualification", "exemptions", "documentList"
+    ]
+  };
+
+  const prompt = `
+    You are an expert at analyzing complex Indian government tender documents.
+    Extract the required information to populate a highly detailed, enterprise-grade summary report.
+    
+    CRITICAL INSTRUCTIONS:
+    1. Do NOT abbreviate or summarize too briefly. The user requires FULL DETAILS.
+    2. For "Work Description" and "Scope of Work", extract long, comprehensive descriptions including all technical specifications, locations, and components mentioned.
+    3. For "Technical Qualification" and "Document List", extract EVERY SINGLE requirement exhaustively. Do not miss any bullet points or sub-clauses from the original PDF. You MUST provide at least 10 technical qualification points.
+    4. For "Finance", ALWAYS include separate rows for: Tender Value, EMD Amount, EMD Details, Tender Fee, Payment Terms, Performance Security. Extract exact numbers.
+    5. For "Key Dates", ALWAYS include separate rows for every date event found: Publication Date, Document Download Start/End, Bid Submission Start/End, Bid Opening. Extract exact date AND time.
+    6. Format your response EXACTLY matching the provided JSON schema.
+    7. If a specific piece of information is entirely missing from the document, provide "Not Specified".
+  `;
+
+  let attempts = 0;
+  const maxAttempts = getApiKeys().length;
+
+  while (attempts < maxAttempts) {
+    try {
+      let currentAi = new GoogleGenAI({ apiKey: getNextApiKey() as string });
+
+      let contents: any;
+      if (mode === 'vision') {
+        contents = [
+          prompt,
+          { inlineData: { mimeType: "application/pdf", data: pdfBuffer.toString('base64') } }
+        ];
+      } else {
+        // text mode
+        contents = `${prompt}\n\n=== DOCUMENT TEXT ===\n${rawText || 'No text extracted'}`;
+      }
+
+      const result = await currentAi.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: contents,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: responseSchema,
+          temperature: 0.1,
+        },
+      });
+
+      if (result.text) {
+        return JSON.parse(result.text);
+      }
+      throw new Error("Empty response from Gemini");
+    } catch (aiError: any) {
+      console.warn(`[AI Summary Extractor] Attempt ${attempts + 1} failed (Status: ${aiError?.status || aiError?.message}).`);
+      if (aiError?.status === 429 || aiError?.status === 503 || aiError?.status === 400) {
+        rotateApiKey();
+        attempts++;
+      } else {
+        throw aiError;
+      }
+    }
+  }
+  
+  throw new Error("All AI models failed to generate the summary.");
 }

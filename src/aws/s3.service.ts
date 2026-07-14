@@ -37,7 +37,7 @@ export class S3Service {
    * Upload a local file to S3 and then optionally delete it locally.
    */
   async uploadFile(localFilePath: string, s3Key: string, deleteAfterUpload = false): Promise<string> {
-    const fileStream = fs.createReadStream(localFilePath);
+    const fileBuffer = fs.readFileSync(localFilePath);
     
     // Determine content type based on extension
     let contentType = 'application/octet-stream';
@@ -48,7 +48,7 @@ export class S3Service {
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: s3Key,
-      Body: fileStream,
+      Body: fileBuffer,
       ContentType: contentType,
     });
 
@@ -97,6 +97,31 @@ export class S3Service {
         .filter(key => Boolean(key));
     } catch (error) {
       this.logger.error(`Failed to list objects in S3 with prefix ${prefix}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * List objects with a specific prefix, including their metadata (size)
+   */
+  async listObjectsWithMetadata(prefix: string): Promise<{ key: string, size: number }[]> {
+    const command = new ListObjectsV2Command({
+      Bucket: this.bucket,
+      Prefix: prefix,
+    });
+
+    try {
+      const response = await this.s3Client.send(command);
+      if (!response.Contents) return [];
+      
+      return response.Contents
+        .filter(obj => Boolean(obj.Key))
+        .map(obj => ({
+          key: obj.Key as string,
+          size: obj.Size || 0
+        }));
+    } catch (error) {
+      this.logger.error(`Failed to list objects with metadata in S3 with prefix ${prefix}:`, error);
       return [];
     }
   }

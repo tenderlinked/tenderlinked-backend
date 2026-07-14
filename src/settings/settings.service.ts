@@ -6,14 +6,20 @@ export class SettingsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getSettings() {
-    const setting = await this.prisma.systemSetting.findUnique({
+    const scrapeIntervalSetting = await this.prisma.systemSetting.findUnique({
       where: { key: "scrapeIntervalHours" },
     });
-    const interval = setting ? parseInt(setting.value, 10) : 6;
-    return { success: true, scrapeIntervalHours: interval };
+    const interval = scrapeIntervalSetting ? parseInt(scrapeIntervalSetting.value, 10) : 6;
+
+    const smsProviderSetting = await this.prisma.systemSetting.findUnique({
+      where: { key: "SMS_PROVIDER" },
+    });
+    const smsProvider = smsProviderSetting ? smsProviderSetting.value : "MSG91";
+
+    return { success: true, scrapeIntervalHours: interval, smsProvider };
   }
 
-  async updateSettings(body: { scrapeIntervalHours?: number }) {
+  async updateSettings(body: { scrapeIntervalHours?: number; smsProvider?: string }) {
     if (body.scrapeIntervalHours !== undefined) {
       const valueStr = body.scrapeIntervalHours.toString();
       await this.prisma.systemSetting.upsert({
@@ -22,6 +28,16 @@ export class SettingsService {
         create: { key: "scrapeIntervalHours", value: valueStr },
       });
     }
+
+    if (body.smsProvider !== undefined) {
+      const valueStr = body.smsProvider.toUpperCase();
+      await this.prisma.systemSetting.upsert({
+        where: { key: "SMS_PROVIDER" },
+        update: { value: valueStr },
+        create: { key: "SMS_PROVIDER", value: valueStr },
+      });
+    }
+    
     return { success: true };
   }
 }

@@ -31,6 +31,7 @@ model Tenant {
   members         TenantMember[]
   subscription    TenantSubscription?
   alertPreference TenantAlertPreference?
+  creditTransactions CreditTransaction[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -119,6 +120,20 @@ model TenantSubscription {
   updatedAt       DateTime @updatedAt
 }
 
+model CreditTransaction {
+  id              String   @id @default(uuid())
+  
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  userId          String?  // The user who performed the action
+  amount          Int      // Negative for deduction, positive for addition
+  description     String   // e.g. "Unlocked Tender TL-1234"
+  tenderId        String?  // Reference to the tender if applicable
+  
+  createdAt       DateTime @default(now())
+}
+
 model PricingPlan {
   id                  String   @id @default(uuid())
   name                String   @unique // "TRIAL", "BASIC", "PROFESSIONAL", "ENTERPRISE"
@@ -130,6 +145,7 @@ model PricingPlan {
   maxKeywords         Int      @default(3)
   maxStates           Int      @default(1)
   maxTenderViews      Int      @default(50)
+  freeRedownloads     Int      @default(3)
   
   // Alerts
   hasEmailAlerts      Boolean  @default(false)
@@ -271,6 +287,7 @@ model Tender {
   aiProcessed     Boolean  @default(false)
   documentsDownloaded Boolean @default(false)
   aiError         String?
+  boq             TenderBoq?
 
   sourceUrl       String?  // Real NICGEP detail URL (session-specific, for reference only)
 
@@ -283,6 +300,17 @@ model Tender {
   @@index([productCategory])
   @@index([startDate(sort: Desc), createdAt(sort: Desc)])
   @@index([aiProcessed])
+}
+
+model TenderBoq {
+  id        String   @id @default(uuid())
+  tenderId  String   @unique
+  tender    Tender   @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  
+  boqData   Json     // Array of BOQ items extracted from Excel
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 
@@ -314,6 +342,7 @@ model TenantUnlockedTender {
   tenantId        String
   tenderId        String
   
+  downloadCount   Int      @default(1)
   unlockedAt      DateTime @default(now())
 
   @@unique([tenantId, tenderId])
@@ -330,6 +359,7 @@ model ScrapeLog {
   targetRegion  String   // e.g., "Odisha", "Maharashtra"
   status        String
   tendersFound  Int
+  newTendersAdded Int    @default(0)
   error         String?
   source        String   @default("AUTO")
   
@@ -408,5 +438,13 @@ model EmailRecipient {
   id        String   @id @default(uuid())
   email     String   @unique
   name      String
+  createdAt DateTime @default(now())
+}
+
+model OtpVerification {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  otp       String
+  expiresAt DateTime
   createdAt DateTime @default(now())
 }

@@ -34,11 +34,32 @@ export class ScraperService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    // Find interrupted scrapes before marking them as failed
+    const interruptedScrapes = await this.prisma.scrapeLog.findMany({
+      where: { OR: [{ status: 'RUNNING' }, { status: 'PAUSED' }] }
+    });
+
     // Clean up any zombie runs left over from a crash
     await this.prisma.scrapeLog.updateMany({
-      where: { status: 'RUNNING' },
-      data: { status: 'FAILED', error: 'Server restarted unexpectedly' }
+      where: { OR: [{ status: 'RUNNING' }, { status: 'PAUSED' }] },
+      data: { status: 'FAILED', error: 'Server restarted unexpectedly. Resuming in a new job.' }
     });
+
+    const targetIdsToResume = interruptedScrapes
+      .map(log => log.targetId)
+      .filter(id => id !== null) as string[];
+      
+    const uniqueTargetIds = [...new Set(targetIdsToResume)];
+
+    if (uniqueTargetIds.length > 0) {
+      console.log(`[ScraperService] Auto-resuming ${uniqueTargetIds.length} interrupted targets after server restart...`);
+      // Add a slight delay to ensure full app initialization before scraping
+      setTimeout(() => {
+        this.scrapeSpecificTargets(uniqueTargetIds, 'AUTO').catch(e => 
+          console.error('[ScraperService] Failed to auto-resume targets:', e)
+        );
+      }, 5000);
+    }
   }
 
   stopScrape() {
@@ -59,7 +80,7 @@ export class ScraperService implements OnModuleInit {
     });
     
     const historicalInstances: ScrapeInstance[] = history
-      .filter(log => !activeNames.has(log.targetRegion))
+      .filter(log => !['RUNNING', 'PENDING', 'PAUSED'].includes(log.status))
       .map(log => ({
         id: log.id,
         targetId: log.targetId || '',
@@ -71,7 +92,7 @@ export class ScraperService implements OnModuleInit {
         progress: {
           page: 0,
           tendersFound: log.tendersFound,
-          newTendersAdded: 0,
+          newTendersAdded: log.newTendersAdded || 0,
         },
         startTime: log.createdAt,
         endTime: log.createdAt,
@@ -81,10 +102,20 @@ export class ScraperService implements OnModuleInit {
     return [...active, ...historicalInstances];
   }
 
-  updateInstanceStatus(id: string, status: ScrapeStatus) {
+  async updateInstanceStatus(id: string, status: ScrapeStatus) {
     const instance = this.activeInstances.get(id);
     if (instance) {
       instance.status = status;
+    } else {
+      // If it's not in active instances, it might be a historical log stuck in the DB
+      try {
+        await this.prisma.scrapeLog.update({
+          where: { id },
+          data: { status }
+        });
+      } catch (e) {
+        console.error(`[ScraperService] Failed to update historical log ${id}:`, e);
+      }
     }
   }
 
@@ -250,7 +281,8 @@ export class ScraperService implements OnModuleInit {
         data: {
           status: "SUCCESS",
           tendersFound: allValidTenders.length,
-        },
+          newTendersAdded: totalNewTendersCount,
+        } as any,
       });
 
       if (instanceId && this.activeInstances.has(instanceId)) {
@@ -342,6 +374,7 @@ export class ScraperService implements OnModuleInit {
         
         const result = await this.scrapeDistrict(target, source, instance.id);
         results.push(result);
+        this.activeInstances.delete(instance.id);
         return result;
       });
     });
@@ -382,12 +415,15 @@ export class ScraperService implements OnModuleInit {
         
         const current = this.activeInstances.get(instance.id);
         if (current) {
-           current.status = result.success ? 'SUCCESS' : 'FAILED';
+           if (current.status !== 'STOPPED') {
+             current.status = result.success ? 'SUCCESS' : 'FAILED';
+           }
            current.endTime = new Date();
-           if (!result.success) current.error = result.error;
+           if (!result.success && current.status !== 'STOPPED') current.error = result.error;
         }
 
         results.push(result);
+        this.activeInstances.delete(instance.id);
         return result;
       });
     });
@@ -460,6 +496,7 @@ export class ScraperService implements OnModuleInit {
         
         const result = await this.scrapeDistrict(target, source, instance.id);
         results.push(result);
+        this.activeInstances.delete(instance.id);
         return result;
       });
     });
@@ -499,12 +536,15 @@ export class ScraperService implements OnModuleInit {
         
         const current = this.activeInstances.get(instance.id);
         if (current) {
-           current.status = result.success ? 'SUCCESS' : 'FAILED';
+           if (current.status !== 'STOPPED') {
+             current.status = result.success ? 'SUCCESS' : 'FAILED';
+           }
            current.endTime = new Date();
-           if (!result.success) current.error = result.error;
+           if (!result.success && current.status !== 'STOPPED') current.error = result.error;
         }
 
         results.push(result);
+        this.activeInstances.delete(instance.id);
         return result;
       });
     });

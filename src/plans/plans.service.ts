@@ -17,6 +17,7 @@ export class PlansService {
     hasEmailAlerts?: boolean;
     hasWhatsappAlerts?: boolean;
     hasSmsAlerts?: boolean;
+    freeRedownloads?: number;
   }) {
     if (data.isDefault) {
       // Unset any existing default
@@ -39,6 +40,7 @@ export class PlansService {
         hasEmailAlerts: data.hasEmailAlerts ?? false,
         hasWhatsappAlerts: data.hasWhatsappAlerts ?? false,
         hasSmsAlerts: data.hasSmsAlerts ?? false,
+        freeRedownloads: data.freeRedownloads ?? 3,
       },
     });
   }
@@ -69,6 +71,7 @@ export class PlansService {
     hasEmailAlerts?: boolean;
     hasWhatsappAlerts?: boolean;
     hasSmsAlerts?: boolean;
+    freeRedownloads?: number;
   }) {
     if (data.isDefault) {
       await this.prisma.pricingPlan.updateMany({

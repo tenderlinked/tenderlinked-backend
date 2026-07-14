@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Query, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, UseGuards, Req, Patch } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
@@ -34,6 +34,14 @@ export class UsersController {
     }
     
     return this.usersService.getProfile(userId, email, isKeycloakSuperAdmin);
+  }
+
+  @Patch('profile/:userId')
+  async updateProfile(
+    @Param('userId') userId: string,
+    @Body() data: any,
+  ) {
+    return this.usersService.updateProfile(userId, data);
   }
 
   @Get('profile/check-phone/:phone')

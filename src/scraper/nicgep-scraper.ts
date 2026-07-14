@@ -180,6 +180,8 @@ export async function scrapeStateTenders(
     },
   });
 
+  const allValidTenders: any[] = [];
+
   try {
     // Resolve Region IDs
     let regionStateId: string | null = target.regionStateId || null;
@@ -264,22 +266,26 @@ export async function scrapeStateTenders(
     }
 
     console.log(`[NICGEP] Found ${rows.length} tenders. Processing...`);
-    const allValidTenders: any[] = [];
 
     const limitCount = source === "TEST" ? 10 : rows.length;
     let retryCount = 0;
+    let wasStopped = false;
     for (let i = 0; i < limitCount; i++) {
       let currentStatus = getStatus();
       if (currentStatus === "STOPPED") {
         console.log("[NICGEP] Scraper stopped.");
+        wasStopped = true;
         break;
       }
       while (currentStatus === "PAUSED") {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         currentStatus = getStatus();
-        if (currentStatus === "STOPPED") break;
+        if (currentStatus === "STOPPED") {
+          wasStopped = true;
+          break;
+        }
       }
-      if (currentStatus === "STOPPED") break;
+      if (wasStopped) break;
 
       const row = rows[i];
       const tds = $(row).find("td");
@@ -360,7 +366,8 @@ export async function scrapeStateTenders(
             const success = await sessionService.downloadDocumentWithCaptcha(
               detailUrl,
               existing.tenderCode || existing.id,
-              stateSlug
+              stateSlug,
+              getStatus
             );
             if (success) {
               await prisma.tender.update({
@@ -612,7 +619,7 @@ export async function scrapeStateTenders(
         pincode: rawPincode,
 
         // Basic Details
-        tenderId: norm(d["Tender ID"]),
+        tenderId: norm(d["Tender ID"]) || (nicgepTenderId.startsWith("hash_") ? null : nicgepTenderId),
         tenderRefNumber: norm(d["Tender Reference Number"]),
         tenderType: norm(d["Tender Type"]),
         formOfContract: norm(d["Form Of Contract"]),
@@ -865,7 +872,8 @@ export async function scrapeStateTenders(
               const success = await sessionService.downloadDocumentWithCaptcha(
                 detailUrl,
                 finalTenderCode || savedTender.id,
-                stateSlug
+                stateSlug,
+                getStatus
               );
               if (success) {
                 await prisma.tender.update({
@@ -905,34 +913,33 @@ export async function scrapeStateTenders(
       `[NICGEP] Finished. Added/Updated ${newTendersCount} tenders.`
     );
 
-    await prisma.scrapeLog.create({
+    await prisma.scrapeLog.update({
+      where: { id: scrapeLog.id },
       data: {
-        targetId: target.id,
-        targetRegion,
-        status: "SUCCESS",
+        status: wasStopped ? "STOPPED" : "SUCCESS",
         tendersFound: allValidTenders.length,
-        source,
-      },
+        newTendersAdded: newTendersCount,
+      } as any,
     });
 
     return {
       district: targetRegion,
-      success: true,
+      success: !wasStopped,
+
       tenders: allValidTenders,
       newTendersCount,
     };
   } catch (error) {
     console.error(`[Scraper Error] Failed to scrape NICGEP State Tenders:`, error);
 
-    await prisma.scrapeLog.create({
+    await prisma.scrapeLog.update({
+      where: { id: scrapeLog.id },
       data: {
-        targetId: target.id,
-        targetRegion,
         status: "FAILED",
-        tendersFound: 0,
+        tendersFound: allValidTenders.length,
+        newTendersAdded: newTendersCount,
         error: error instanceof Error ? error.message : "Unknown error",
-        source,
-      },
+      } as any,
     });
 
     return {

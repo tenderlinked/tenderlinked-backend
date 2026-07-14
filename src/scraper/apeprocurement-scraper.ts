@@ -476,9 +476,10 @@ export async function scrapeApStateTenders(
           targetRegion,
           status: "FAILED",
           tendersFound: allValidTenders.length,
+          newTendersAdded: newTendersCount,
           error: error instanceof Error ? error.message : "Unknown error",
           source,
-        },
+        } as any,
       });
 
       return {
@@ -498,8 +499,9 @@ export async function scrapeApStateTenders(
       targetRegion,
       status: "SUCCESS",
       tendersFound: allValidTenders.length,
+      newTendersAdded: newTendersCount,
       source,
-    },
+    } as any,
   });
 
   return {

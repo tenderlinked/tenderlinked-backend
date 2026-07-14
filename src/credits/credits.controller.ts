@@ -24,6 +24,18 @@ export class CreditsController {
     return this.creditsService.unlockTender(userId, tenderId);
   }
 
+  @Get('tenders/:id/download-status')
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: 'Check if a tender is unlocked and its download count' })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getDownloadStatus(@Param('id') tenderId: string, @Req() req: any) {
+    const userId = this.extractUserId(req);
+    if (!userId) return { success: false, message: 'Unauthorized' };
+    
+    return this.creditsService.getDownloadStatus(userId, tenderId);
+  }
+
   @Get('billing/usage')
   @RequirePermissions('tenders:read')
   @ApiOperation({ summary: 'Get current credit balance and limits' })
@@ -35,6 +47,18 @@ export class CreditsController {
     if (!userId) return { availableCredits: 0, tendersViewedThisMonth: 0, maxTenderViews: 0 };
     
     return this.creditsService.getUsage(userId);
+  }
+
+  @Get('billing/history')
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: 'Get credit usage history' })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })async getHistory(@Req() req: any) {
+    const userId = this.extractUserId(req);
+    if (!userId) return [];
+    
+    return this.creditsService.getHistory(userId);
   }
 
   private extractUserId(req: any): string | null {

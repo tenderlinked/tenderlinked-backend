@@ -87,7 +87,7 @@ export class EmailService {
 
     try {
       // 2. Build Email HTML
-      const sender = "sahadeb@enfycon.com";
+      const sender = "no-reply@tenderlinked.com";
 
       const tendersHtml = `
         <div class="table-container" style="overflow-x: auto;">
@@ -202,7 +202,7 @@ export class EmailService {
   }
 
   async sendWelcomeEmail(recipientEmail: string, recipientName: string) {
-    const sender = "sahadeb@enfycon.com";
+    const sender = "no-reply@tenderlinked.com";
     const subject = "Welcome to TenderLinked!";
     const htmlBody = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -221,7 +221,7 @@ export class EmailService {
   }
 
   async sendPasswordResetOtp(recipientEmail: string, otp: string) {
-    const sender = "sahadeb@enfycon.com";
+    const sender = "no-reply@tenderlinked.com";
     const subject = "Your Password Reset OTP - TenderLinked";
     const htmlBody = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">

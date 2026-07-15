@@ -8,6 +8,7 @@ import {
   Body,
   BadRequestException,
   InternalServerErrorException,
+  UnauthorizedException,
   Req,
   Res,
 } from "@nestjs/common";
@@ -298,16 +299,31 @@ export class TendersController {
   @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { isBookmarked: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateBookmark(
     @Param("id") id: string,
-    @Body() body: { isBookmarked: boolean; isState?: boolean }
+    @Body() body: { isBookmarked: boolean; isState?: boolean },
+    @Req() req: any
   ) {
     if (typeof body.isBookmarked !== "boolean") {
       throw new BadRequestException("Invalid data: isBookmarked must be a boolean");
     }
+
+    let userId: string | null = null;
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        userId = decodedPayload.sub;
+      } catch (e) {}
+    }
+    if (!userId) throw new UnauthorizedException("User ID missing from token");
+
     try {
       const updated = await this.tendersService.updateBookmark(
         id,
         body.isBookmarked,
-        body.isState ?? false
+        body.isState ?? false,
+        userId
       );
       return { success: true, data: updated };
     } catch (error) {
@@ -326,16 +342,31 @@ export class TendersController {
   @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { isApplied: { type: "boolean" }, isState: { type: "boolean", default: false } } } })
   async updateApplied(
     @Param("id") id: string,
-    @Body() body: { isApplied: boolean; isState?: boolean }
+    @Body() body: { isApplied: boolean; isState?: boolean },
+    @Req() req: any
   ) {
     if (typeof body.isApplied !== "boolean") {
       throw new BadRequestException("Invalid data: isApplied must be a boolean");
     }
+
+    let userId: string | null = null;
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        userId = decodedPayload.sub;
+      } catch (e) {}
+    }
+    if (!userId) throw new UnauthorizedException("User ID missing from token");
+
     try {
       const updated = await this.tendersService.updateApplied(
         id,
         body.isApplied,
-        body.isState ?? false
+        body.isState ?? false,
+        userId
       );
       return { success: true, data: updated };
     } catch (error) {

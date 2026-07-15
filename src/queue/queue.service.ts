@@ -19,18 +19,24 @@ export class QueueService {
       return { success: true, processed: 0, message: "Queue is empty." };
     }
 
-    for (const tender of allPending) {
-      // Temporarily mark them so they don't get re-added immediately on next poll
-      // (The BoqProcessorService will update this correctly with results/errors)
-      await this.prisma.tender.update({
-        where: { id: tender.id },
-        data: { aiProcessed: true, aiError: 'Processing in background' }
-      });
+    // Fire and forget a sequential worker loop
+    // This prevents the API from blocking, but ensures we only process 1 PDF at a time
+    // to prevent CPU/RAM spikes on the VPS which would slow down the main website.
+    (async () => {
+      for (const tender of allPending) {
+        await this.prisma.tender.update({
+          where: { id: tender.id },
+          data: { aiProcessed: true, aiError: 'Processing in background' }
+        });
 
-      this.boqProcessorService.processTender(tender.id).catch(err => {
-        console.error(`[BoqProcessorService] Failed to process tender ${tender.id}:`, err);
-      });
-    }
+        try {
+          // AWAIT ensures sequential execution (Concurrency: 1)
+          await this.boqProcessorService.processTender(tender.id);
+        } catch (err) {
+          console.error(`[BoqProcessorService] Failed to process tender ${tender.id}:`, err);
+        }
+      }
+    })();
 
     const remainingCount = await this.prisma.tender.count({
       where: { aiProcessed: false },
@@ -41,7 +47,7 @@ export class QueueService {
       processed: allPending.length,
       errors: 0,
       remaining: remainingCount,
-      message: `Dispatched ${allPending.length} jobs to BullMQ.`
+      message: `Dispatched ${allPending.length} jobs to background sequential worker.`
     };
   }
 }

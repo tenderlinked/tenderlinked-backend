@@ -202,7 +202,29 @@ export class TendersService {
 
     const [tenders, total, pendingQueue] = await Promise.all([
       this.prisma.tender.findMany({
-        where, skip, take, orderBy
+        where, skip, take, orderBy,
+        select: {
+          id: true,
+          tenderCode: true,
+          title: true,
+          description: true,
+          organisation: true,
+          state: true,
+          district: true,
+          city: true,
+          location: true,
+          tenderAmount: true,
+          tenderValue: true,
+          noticePdfUrl: true,
+          tenderPdfUrl: true,
+          startDate: true,
+          endDate: true,
+          aiSummary: true,
+          documentsDownloaded: true,
+          tags: true,
+          createdAt: true,
+          tenderCategory: true
+        }
       }),
       this.prisma.tender.count({ where }),
       this.prisma.tender.count({ where: { aiProcessed: false } }),
@@ -434,13 +456,48 @@ export class TendersService {
     await archive.finalize();
   }
 
-  // TODO: Update these methods in Phase 3 to use TenantTenderAction
-  async updateBookmark(id: string, isBookmarked: boolean, isState: boolean) {
-    return { success: true, message: "Bookmark endpoint requires Tenant Context (Phase 3)" };
+  async updateBookmark(id: string, isBookmarked: boolean, isState: boolean, userId: string) {
+    const member = await this.prisma.tenantMember.findFirst({ where: { userId } });
+    if (!member?.tenantId) throw new Error("Tenant not found");
+    
+    const action = await this.prisma.tenantTenderAction.upsert({
+      where: {
+        tenantId_tenderId: {
+          tenantId: member.tenantId,
+          tenderId: id,
+        },
+      },
+      update: { isBookmarked },
+      create: {
+        tenantId: member.tenantId,
+        tenderId: id,
+        isBookmarked,
+      },
+    });
+
+    return { success: true, action };
   }
 
-  async updateApplied(id: string, isApplied: boolean, isState: boolean) {
-    return { success: true, message: "Applied endpoint requires Tenant Context (Phase 3)" };
+  async updateApplied(id: string, isApplied: boolean, isState: boolean, userId: string) {
+    const member = await this.prisma.tenantMember.findFirst({ where: { userId } });
+    if (!member?.tenantId) throw new Error("Tenant not found");
+    
+    const action = await this.prisma.tenantTenderAction.upsert({
+      where: {
+        tenantId_tenderId: {
+          tenantId: member.tenantId,
+          tenderId: id,
+        },
+      },
+      update: { isApplied },
+      create: {
+        tenantId: member.tenantId,
+        tenderId: id,
+        isApplied,
+      },
+    });
+
+    return { success: true, action };
   }
 
   async retryAi(id: string, isState: boolean) {

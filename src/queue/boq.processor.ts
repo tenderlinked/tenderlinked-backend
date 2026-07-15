@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { extractTenderDetailsFromPdf, extractTenderDetailsFromText, ExtractedTenderDetails } from '../scraper/pdf-extractor';
+import { categorizeTender } from '../common/utils/tender-categorizer.util';
 import { EmailService } from '../email/email.service';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -62,6 +63,8 @@ export class BoqProcessorService {
       let boqData: any[] | null = null;
 
       // 2. Process PDF and BOQ based on S3 keys
+      let combinedRawText = `${tender.title} ${tender.description || ''} `;
+      
       if (targetPdfKey || zipKey) {
         const downloadsDir = path.join(process.cwd(), 'downloads');
         if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
@@ -80,30 +83,61 @@ export class BoqProcessorService {
           }
 
           if (fs.existsSync(localPdfPath)) {
-            details = await extractTenderDetailsFromPdf(localPdfPath);
-          } else if (!details) {
-            details = await extractTenderDetailsFromText(tender.title, tender.description || '');
+            try {
+              const PDFParser = require("pdf2json");
+              const rawTextFromPdf = await Promise.race([
+                new Promise<string>((resolve, reject) => {
+                  const pdfParser = new PDFParser(null, 1);
+                  pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
+                  pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
+                  pdfParser.parseBuffer(fs.readFileSync(localPdfPath));
+                }),
+                new Promise<string>((_, reject) =>
+                  setTimeout(() => reject(new Error("pdf2json timeout")), 10000)
+                ),
+              ]);
+              if (rawTextFromPdf) {
+                combinedRawText += ` ${rawTextFromPdf}`;
+              }
+            } catch (e) {
+              console.warn(`[Queue] Failed to extract text from PDF:`, e);
+            }
           }
-        } else {
-           details = await extractTenderDetailsFromText(tender.title, tender.description || '');
         }
 
         if (zipKey) {
            const zipUrl = await this.s3Service.getPresignedUrl(zipKey);
            boqData = await this.extractBoqFromZip(zipUrl);
+           if (boqData && boqData.length > 0) {
+              combinedRawText += ` ${JSON.stringify(boqData)}`;
+           }
         }
-      } else {
-        details = await extractTenderDetailsFromText(tender.title, tender.description || '');
       }
+
+      // Run local keyword-based categorization
+      const categoryResult = categorizeTender(combinedRawText);
+      
+      details = {
+        aiSummary: null, // User requested to bypass LLM for summary
+        tags: categoryResult.tags,
+        tenderValue: null,
+        emd: null,
+        applicationCost: null,
+      };
 
       // 4. Save to Database
       if (details) {
         const updateData: any = {
           aiSummary: details.aiSummary,
           tags: details.tags,
+          tenderCategory: categoryResult.category,
           aiProcessed: true,
           aiError: null,
         };
+
+        if (targetPdfKey || zipKey) {
+          updateData.documentsDownloaded = true;
+        }
 
         if (details.tenderValue) updateData.tenderValue = details.tenderValue;
         if (details.emd) updateData.emd = details.emd;

@@ -37,6 +37,11 @@ export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], is
       redactedTender[field] = CREDIT_REDACTED_PLACEHOLDER;
     }
   }
+  const isSessionDependent = (url: string) => url?.includes('nicgep/app') || url?.includes('session=');
+  const hasValidNotice = tender.noticePdfUrl && tender.noticePdfUrl.trim() !== '' && !isSessionDependent(tender.noticePdfUrl);
+  const hasValidTender = tender.tenderPdfUrl && tender.tenderPdfUrl.trim() !== '' && !isSessionDependent(tender.tenderPdfUrl);
+  
+  redactedTender.hasDocuments = !!(tender.documentsDownloaded || hasValidNotice || hasValidTender);
 
   return redactedTender;
 }

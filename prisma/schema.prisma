@@ -1,10 +1,12 @@
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm]
 }
 
 // Global Roles for Super Admin capabilities
@@ -298,6 +300,15 @@ model Tender {
   @@index([endDate])
   @@index([bidOpeningDate])
   @@index([productCategory])
+  @@index([tenderAmount])
+  @@index([createdAt(sort: Desc)])
+  @@index([state(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([district(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([city(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([organisation(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([tenderCategory(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([aiSummary(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([startDate(sort: Desc), createdAt(sort: Desc)])
   @@index([aiProcessed])
 }
@@ -334,6 +345,8 @@ model TenantTenderAction {
   updatedAt       DateTime @updatedAt
 
   @@unique([tenantId, tenderId])
+  @@index([tenantId])
+  @@index([tenderId])
 }
 
 model TenantUnlockedTender {

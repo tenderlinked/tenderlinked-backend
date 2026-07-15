@@ -161,6 +161,7 @@ export class PaymentsService {
     }
 
     const tenant = await this.getOrCreateUserTenant(userId);
+    const credits = plan ? plan.monthlyCredits : 0;
 
     await this.prisma.tenantSubscription.upsert({
       where: { tenantId: tenant.id },
@@ -171,7 +172,8 @@ export class PaymentsService {
         endDate,
         paymentMethod,
         paymentId,
-        amount
+        amount,
+        availableCredits: credits
       },
       create: {
         tenantId: tenant.id,
@@ -181,7 +183,8 @@ export class PaymentsService {
         endDate,
         paymentMethod,
         paymentId,
-        amount
+        amount,
+        availableCredits: credits
       }
     });
   }

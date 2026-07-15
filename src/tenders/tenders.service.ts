@@ -42,14 +42,43 @@ export class TendersService {
     minAmount?: number | null;
     maxAmount?: number | null;
     sidebarKeywords?: string[];
+    sort?: string | null;
   }) {
     const {
       userId, search, active, priority, page, pageSize, date, excludeToday, tenderType,
-      states, districts, categories, authorities, minAmount, maxAmount, sidebarKeywords
+      states, districts, categories, authorities, minAmount, maxAmount, sidebarKeywords,
+      bookmarked, sort
     } = params;
 
     const keywords = await this.prisma.priorityKeyword.findMany();
     const keywordList = keywords.map((k: any) => k.word);
+
+    let allowedFields: string[] = [];
+    let tenantId: string | null = null;
+    let unlockedTenderIds: Set<string> = new Set();
+    let allBookmarkedIds: Set<string> = new Set();
+
+    if (userId) {
+      const member = await this.prisma.tenantMember.findFirst({
+        where: { userId },
+        include: { tenant: { include: { subscription: true } } }
+      });
+      if (member?.tenant?.id) {
+        tenantId = member.tenant.id;
+        if (member.tenant.subscription?.planType) {
+          const plan = await this.prisma.pricingPlan.findUnique({
+            where: { name: member.tenant.subscription.planType }
+          });
+          if (plan) allowedFields = plan.allowedTenderFields;
+        } else {
+          const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+          if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+        }
+      }
+    } else {
+      const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+      if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+    }
 
     const where: any = {};
     const AND: any[] = [];
@@ -148,58 +177,51 @@ export class TendersService {
       where.endDate = { lt: new Date() };
     }
 
+    if (bookmarked === "true" && tenantId) {
+      const actions = await this.prisma.tenantTenderAction.findMany({
+        where: { tenantId, isBookmarked: true },
+        select: { tenderId: true }
+      });
+      const bIds = actions.map(a => a.tenderId);
+      AND.push({ id: { in: bIds.length > 0 ? bIds : ['NONE'] } });
+    }
+
     if (AND.length > 0) where.AND = AND;
+
+    let orderBy: any = [{ startDate: "desc" }, { createdAt: "desc" }];
+    if (sort === "newest") {
+      orderBy = [{ createdAt: "desc" }];
+    } else if (sort === "closing_soon") {
+      orderBy = [{ endDate: "asc" }];
+    } else if (sort === "high_value") {
+      orderBy = [{ tenderAmount: "desc" }];
+    }
 
     const skip = (page - 1) * pageSize;
     const take = pageSize;
 
     const [tenders, total, pendingQueue] = await Promise.all([
       this.prisma.tender.findMany({
-        where, skip, take, orderBy: [{ startDate: "desc" }, { createdAt: "desc" }]
+        where, skip, take, orderBy
       }),
       this.prisma.tender.count({ where }),
       this.prisma.tender.count({ where: { aiProcessed: false } }),
     ]);
 
-    // Get user's subscription and pricing plan to determine redaction
-    let allowedFields: string[] = [];
-    let unlockedTenderIds: Set<string> = new Set();
-    
-    if (userId) {
-      const member = await this.prisma.tenantMember.findFirst({
-        where: { userId },
-        include: { 
-          tenant: { 
-            include: { subscription: true } 
-          }
-        }
-      });
-      
-      if (member?.tenant?.id) {
-        // Fetch unlocks for this tenant
-        const unlocks = await this.prisma.tenantUnlockedTender.findMany({
-          where: { tenantId: member.tenant.id, tenderId: { in: tenders.map(t => t.id) } },
+    if (tenantId && tenders.length > 0) {
+      const tenderIds = tenders.map(t => t.id);
+      const [unlocks, actions] = await Promise.all([
+        this.prisma.tenantUnlockedTender.findMany({
+          where: { tenantId, tenderId: { in: tenderIds } },
           select: { tenderId: true }
-        });
-        unlockedTenderIds = new Set(unlocks.map(u => u.tenderId));
-      }
-      
-      if (member?.tenant?.subscription?.planType) {
-        const plan = await this.prisma.pricingPlan.findUnique({
-          where: { name: member.tenant.subscription.planType }
-        });
-        if (plan) {
-          allowedFields = plan.allowedTenderFields;
-        }
-      } else {
-        // Fallback for default plan if no subscription
-        const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
-        if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
-      }
-    } else {
-      // Unauthenticated, apply default plan constraints
-      const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
-      if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
+        }),
+        this.prisma.tenantTenderAction.findMany({
+          where: { tenantId, tenderId: { in: tenderIds }, isBookmarked: true },
+          select: { tenderId: true }
+        })
+      ]);
+      unlockedTenderIds = new Set(unlocks.map(u => u.tenderId));
+      allBookmarkedIds = new Set(actions.map(a => a.tenderId));
     }
 
     const formattedTenders = tenders.map((t: any) => {
@@ -210,8 +232,7 @@ export class TendersService {
       const enhancedTender = {
         ...t,
         isHighPriority: hasHighPriorityTag || titleMatch || summaryMatch,
-        // TODO: In Phase 3, this will be fetched from TenantTenderAction using the authenticated user's tenantId
-        isBookmarked: false,
+        isBookmarked: allBookmarkedIds.has(t.id),
         isApplied: false,
       };
 

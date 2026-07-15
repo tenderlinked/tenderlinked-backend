@@ -73,6 +73,7 @@ export class TendersController {
     @Query("keywords") keywordsParam?: string | string[],
     @Query("minAmount") minAmount?: string,
     @Query("maxAmount") maxAmount?: string,
+    @Query("sort") sort?: string,
     @Req() req?: any
   ) {
     try {
@@ -116,6 +117,7 @@ export class TendersController {
         sidebarKeywords: parseArr(keywordsParam),
         minAmount: minAmount ? parseFloat(minAmount) : null,
         maxAmount: maxAmount ? parseFloat(maxAmount) : null,
+        sort: sort || null,
       });
     } catch (error: any) {
       console.error("[GET /tenders] Error:", error);

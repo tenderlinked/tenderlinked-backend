@@ -406,11 +406,35 @@ export class TenantsService {
   // ---- Alert Preferences ----
   async saveAlertPreferencesByTenantId(tenantId: string, data: { keywords: string[], preferredStates: string[], tenderValueRange?: string, companyWebsite?: string }) {
     const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId }
+      where: { id: tenantId },
+      include: { subscription: true }
     });
 
     if (!tenant) {
       throw new NotFoundException("Tenant not found");
+    }
+
+    let maxKeywords = 3;
+    let maxStates = 1;
+    if (tenant.subscription?.planType) {
+      const plan = await this.prisma.pricingPlan.findUnique({ where: { name: tenant.subscription.planType } });
+      if (plan) {
+        maxKeywords = plan.maxKeywords;
+        maxStates = plan.maxStates;
+      }
+    } else {
+      const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+      if (defaultPlan) {
+        maxKeywords = defaultPlan.maxKeywords;
+        maxStates = defaultPlan.maxStates;
+      }
+    }
+
+    if (data.keywords && data.keywords.length > maxKeywords) {
+      throw new BadRequestException(`Your current plan limits you to ${maxKeywords} keyword(s). Please upgrade to save more.`);
+    }
+    if (data.preferredStates && data.preferredStates.length > maxStates) {
+      throw new BadRequestException(`Your current plan limits you to ${maxStates} state(s). Please upgrade to save more.`);
     }
 
     // Intercept keywords to populate the KeywordExpansion dictionary for Super Admin review

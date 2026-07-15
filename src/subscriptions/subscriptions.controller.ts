@@ -10,9 +10,20 @@ export class SubscriptionsController {
 
   @Get(':userId/active')
   async getActiveSubscription(@Param('userId') userId: string, @Req() req: Request) {
+    let tokenUserId: string | null = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        tokenUserId = decodedPayload.sub;
+      } catch (e) {}
+    }
+
     const internalSecret = process.env.INTERNAL_API_SECRET || 'fallback-internal-secret-xyz';
-    if (req.headers['x-internal-secret'] !== internalSecret) {
-      throw new UnauthorizedException('Invalid internal API secret');
+    if (req.headers['x-internal-secret'] !== internalSecret && tokenUserId !== userId) {
+      throw new UnauthorizedException('Invalid internal API secret or unauthorized token');
     }
     console.log(`[Subscriptions] Checking active plan for user: ${userId}`);
     const sub = await this.subscriptionsService.getActiveSubscription(userId);

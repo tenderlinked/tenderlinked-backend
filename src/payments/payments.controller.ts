@@ -86,6 +86,20 @@ export class PaymentsController {
     );
   }
 
+  @Post('free-activate')
+  async freeActivate(@Req() req: any, @Body() body: { userId: string; planType: string }) {
+    this.extractAndVerifyUserId(req, body.userId);
+    await this.paymentsService.createSubscriptionAfterSuccess(
+      body.userId,
+      body.planType,
+      "FREE",
+      `free_${body.userId.substring(0, 8)}_${Date.now()}`,
+      0,
+      false
+    );
+    return { success: true };
+  }
+
   @Post('webhook')
   async handleWebhook(@Body() body: any, @Headers('x-razorpay-signature') signature: string) {
     if (!signature) {

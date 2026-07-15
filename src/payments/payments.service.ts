@@ -206,17 +206,24 @@ export class PaymentsService {
     const normalizedPlan = actualPlanName.toLowerCase();
 
     let planId = "";
-    if (normalizedPlan === "basic") {
+    if (normalizedPlan === "starter" || normalizedPlan === "basic") {
       planId = "plan_T7u6P0XKteSgsZ";
-    } else if (normalizedPlan === "professional") {
+    } else if (normalizedPlan === "standard" || normalizedPlan === "professional") {
       planId = "plan_T7u6PUlcX9Rpfz";
-    } else if (normalizedPlan === "enterprise") {
+    } else if (normalizedPlan === "premium" || normalizedPlan === "enterprise") {
       planId = "plan_T7u6RIIempfIcE";
     }
     
     let startAt: number | undefined = undefined;
-    if (eligible && normalizedPlan === "basic") {
-      startAt = Math.floor(Date.now() / 1000) + (3 * 24 * 60 * 60);
+    if (eligible && (
+      normalizedPlan === "starter" || 
+      normalizedPlan === "standard" || 
+      normalizedPlan === "premium" || 
+      normalizedPlan === "basic" || 
+      normalizedPlan === "professional" || 
+      normalizedPlan === "enterprise"
+    )) {
+      startAt = Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60);
     }
 
     if (!planId) throw new BadRequestException(`Plan ID not configured for ${actualPlanName}`);

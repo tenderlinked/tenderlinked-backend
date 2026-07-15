@@ -99,7 +99,8 @@ function calculateBestMatch(text: string, dictionary: Record<string, string[]>):
 }
 
 export function categorizeTender(rawText: string): CategorizationResult {
-  const text = rawText.toLowerCase();
+  // Replace underscores and hyphens with spaces to allow \b to match correctly
+  const text = rawText.toLowerCase().replace(/[_-]/g, ' ');
   
   const bestCategory = calculateBestMatch(text, CATEGORY_DICTIONARY) || "Other / Miscellaneous";
   const bestWorkType = calculateBestMatch(text, WORK_TYPE_DICTIONARY);

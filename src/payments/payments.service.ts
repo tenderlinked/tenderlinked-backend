@@ -117,8 +117,16 @@ export class PaymentsService {
 
   async checkTrialEligibility(userId: string) {
     const tenant = await this.getOrCreateUserTenant(userId);
-    const existing = await this.prisma.tenantSubscription.findUnique({
-      where: { tenantId: tenant.id }
+    const existing = await this.prisma.tenantSubscription.findFirst({
+      where: { 
+        tenantId: tenant.id,
+        NOT: {
+          planType: {
+            equals: "Free",
+            mode: "insensitive"
+          }
+        }
+      }
     });
     return { eligible: !existing };
   }
@@ -146,7 +154,7 @@ export class PaymentsService {
     const normalizedPlan = actualPlanName.toLowerCase();
 
     const startDate = new Date();
-    const endDate = new Date();
+    let endDate = new Date();
 
     if (isTrial) {
       endDate.setDate(endDate.getDate() + 14);
@@ -161,7 +169,46 @@ export class PaymentsService {
     }
 
     const tenant = await this.getOrCreateUserTenant(userId);
-    const credits = plan ? plan.monthlyCredits : 0;
+    let credits = plan ? plan.monthlyCredits : 0;
+
+    // Check for active subscription to compute prorated upgrade/downgrade duration
+    const existingSub = await this.prisma.tenantSubscription.findUnique({
+      where: { tenantId: tenant.id }
+    });
+
+    if (existingSub && existingSub.status === "ACTIVE" && existingSub.planType !== actualPlanName) {
+      // Preserve existing credits
+      credits = existingSub.availableCredits;
+
+      const now = new Date();
+      if (existingSub.endDate > now) {
+        const timeDiff = existingSub.endDate.getTime() - now.getTime();
+        const remainingDays = timeDiff / (1000 * 60 * 60 * 24);
+
+        // Fetch old plan pricing details
+        const oldPlan = await this.prisma.pricingPlan.findFirst({
+          where: {
+            OR: [
+              { name: existingSub.planType },
+              { id: existingSub.planType }
+            ]
+          }
+        }).catch(() => null);
+
+        const oldPrice = oldPlan ? oldPlan.price : (existingSub.amount || 0);
+        const newPrice = plan ? plan.price : amount;
+
+        if (oldPrice && oldPrice > 0 && newPrice && newPrice > 0) {
+          const proratedDays = remainingDays * (oldPrice / newPrice);
+          // Add the prorated credit days to the already calculated base endDate (which has the 30-day or 1-month fresh cycle)
+          endDate.setDate(endDate.getDate() + Math.round(proratedDays));
+          
+          console.log(`[Proration] Adjusted subscription for user ${userId}: plan changed from ${existingSub.planType} (₹${oldPrice}) to ${actualPlanName} (₹${newPrice}). Prorated credit of ${proratedDays.toFixed(1)} days added. Final endDate: ${endDate}.`);
+        }
+      }
+    }
+
+    const finalAmount = (plan && plan.price !== null) ? plan.price : amount;
 
     await this.prisma.tenantSubscription.upsert({
       where: { tenantId: tenant.id },
@@ -172,7 +219,7 @@ export class PaymentsService {
         endDate,
         paymentMethod,
         paymentId,
-        amount,
+        amount: finalAmount,
         availableCredits: credits
       },
       create: {
@@ -183,7 +230,7 @@ export class PaymentsService {
         endDate,
         paymentMethod,
         paymentId,
-        amount,
+        amount: finalAmount,
         availableCredits: credits
       }
     });
@@ -209,12 +256,10 @@ export class PaymentsService {
     const normalizedPlan = actualPlanName.toLowerCase();
 
     let planId = "";
-    if (normalizedPlan === "starter" || normalizedPlan === "basic") {
-      planId = "plan_T7u6P0XKteSgsZ";
-    } else if (normalizedPlan === "standard" || normalizedPlan === "professional") {
-      planId = "plan_T7u6PUlcX9Rpfz";
-    } else if (normalizedPlan === "premium" || normalizedPlan === "enterprise") {
-      planId = "plan_T7u6RIIempfIcE";
+    if (plan && plan.price && plan.price > 0) {
+      planId = await this.getOrCreateRazorpayPlan(actualPlanName, plan.price);
+    } else {
+      throw new BadRequestException(`Cannot create subscription for a free or unpriced plan`);
     }
     
     let startAt: number | undefined = undefined;
@@ -375,6 +420,202 @@ export class PaymentsService {
     } catch (e) {
       console.error("Failed to cancel subscription", e);
       throw new InternalServerErrorException("Failed to cancel subscription");
+    }
+  }
+
+  async cancelAndUpgrade(userId: string, planIdOrName: string) {
+    if (!this.razorpay) throw new InternalServerErrorException("Razorpay not configured");
+
+    const tenant = await this.getOrCreateUserTenant(userId);
+    const existingSub = await this.prisma.tenantSubscription.findUnique({
+      where: { tenantId: tenant.id }
+    });
+
+    if (!existingSub || existingSub.status !== "ACTIVE") {
+      throw new BadRequestException("No active subscription found to upgrade");
+    }
+
+    // Step 1: Cancel the existing Razorpay subscription
+    if (existingSub.paymentId && existingSub.paymentMethod === "RAZORPAY_SUB") {
+      try {
+        await this.razorpay.subscriptions.cancel(existingSub.paymentId, false);
+        console.log(`[Upgrade] Cancelled existing Razorpay subscription ${existingSub.paymentId} for user ${userId}`);
+      } catch (err: any) {
+        const msg = (err.error?.description || err.message || "").toLowerCase();
+        if (!msg.includes("cancelled") && !msg.includes("already cancelled")) {
+          console.warn("Failed to cancel existing subscription on Razorpay:", err.error || err);
+          // Continue anyway — we still create the new subscription
+        }
+      }
+    }
+
+    // Step 2: Resolve the new plan and its Razorpay plan ID
+    let plan = await this.prisma.pricingPlan.findUnique({ where: { id: planIdOrName } }).catch(() => null);
+    if (!plan) {
+      plan = await this.prisma.pricingPlan.findUnique({ where: { name: planIdOrName } }).catch(() => null);
+    }
+    if (!plan) throw new BadRequestException("Selected plan not found");
+
+    if (!plan.price || plan.price <= 0) {
+      throw new BadRequestException("Cannot upgrade to a free plan via subscription");
+    }
+    
+    const razorpayPlanId = await this.getOrCreateRazorpayPlan(plan.name, plan.price);
+
+    // Step 3: Calculate prorated next billing date
+    // remaining monetary value on old plan ÷ new daily rate → new remaining days
+    const now = new Date();
+    const oldPrice = Number(existingSub.amount ?? 0);
+    const newPrice = Number(plan.price ?? 0);
+    const remainingMs = existingSub.endDate.getTime() - now.getTime();
+    const remainingDays = Math.max(0, remainingMs / (1000 * 60 * 60 * 24));
+
+    let startAt: number | undefined = undefined;
+    let proratedDays = remainingDays;
+
+    if (oldPrice > 0 && newPrice > 0 && remainingDays > 0) {
+      proratedDays = remainingDays * (oldPrice / newPrice);
+      const proratedDate = new Date();
+      proratedDate.setDate(proratedDate.getDate() + Math.max(1, Math.round(proratedDays)));
+      // start_at must be a Unix timestamp in seconds
+      startAt = Math.floor(proratedDate.getTime() / 1000);
+      console.log(`[Upgrade] Prorated next billing: ${existingSub.planType} (₹${oldPrice}) → ${plan.name} (₹${newPrice}). Remaining ${remainingDays.toFixed(1)} days → ${proratedDays.toFixed(1)} days. start_at: ${proratedDate}`);
+    }
+
+    // Step 4: Create new Razorpay subscription with deferred start date
+    // Razorpay will only collect the ₹5 mandate auth fee now; first real charge on start_at date
+    try {
+      const options: any = {
+        plan_id: razorpayPlanId,
+        customer_notify: 1,
+        total_count: 120,
+        notes: { userId, planType: plan.name, upgradeFrom: existingSub.planType }
+      };
+      if (startAt) {
+        options.start_at = startAt;
+      }
+
+      const subscription = await this.razorpay.subscriptions.create(options);
+      console.log(`[Upgrade] Created new Razorpay subscription ${subscription.id} for user ${userId}: ${existingSub.planType} → ${plan.name}`);
+      return {
+        subscriptionId: subscription.id,
+        proratedDays: Math.max(1, Math.round(proratedDays))
+      };
+    } catch (e) {
+      console.error("Failed to create new Razorpay subscription for upgrade", e);
+      throw new InternalServerErrorException("Failed to create upgrade subscription");
+    }
+  }
+
+  async changePlanDirectly(userId: string, planIdOrName: string) {
+    const tenant = await this.getOrCreateUserTenant(userId);
+    const existingSub = await this.prisma.tenantSubscription.findUnique({
+      where: { tenantId: tenant.id }
+    });
+
+    if (!existingSub || existingSub.status !== "ACTIVE") {
+      throw new BadRequestException("No active subscription found to modify");
+    }
+
+    // Resolve pricing plan
+    let plan = await this.prisma.pricingPlan.findUnique({
+      where: { id: planIdOrName }
+    }).catch(() => null);
+
+    if (!plan) {
+      plan = await this.prisma.pricingPlan.findUnique({
+        where: { name: planIdOrName }
+      }).catch(() => null);
+    }
+
+    if (!plan) {
+      throw new BadRequestException("Selected plan not found");
+    }
+
+    const actualPlanName = plan.name;
+    const now = new Date();
+    const remainingTime = existingSub.endDate.getTime() - now.getTime();
+    const remainingDays = Math.max(0, remainingTime / (1000 * 60 * 60 * 24));
+
+    const oldPrice = Number(existingSub.amount ?? 0);
+    const newPrice = Number(plan.price ?? 0);
+
+    let nextBillingDate: Date;
+
+    if (oldPrice > 0 && newPrice > 0 && remainingDays > 0) {
+      // Prorate remaining monetary value into days of the new plan:
+      // Upgrading → fewer days (earlier end date)
+      // Downgrading → more days (later end date)
+      const newRemainingDays = remainingDays * (oldPrice / newPrice);
+      nextBillingDate = new Date();
+      nextBillingDate.setDate(nextBillingDate.getDate() + Math.max(1, Math.round(newRemainingDays)));
+      console.log(`[Plan Change] User ${userId}: ${existingSub.planType} (₹${oldPrice}) → ${actualPlanName} (₹${newPrice}). Remaining days: ${remainingDays.toFixed(1)} → ${newRemainingDays.toFixed(1)}. New billing date: ${nextBillingDate}`);
+    } else {
+      // Fallback: keep existing end date
+      nextBillingDate = new Date(existingSub.endDate);
+    }
+
+    // Update in Razorpay if needed
+    if (existingSub.paymentId && existingSub.paymentMethod === "RAZORPAY_SUB") {
+      try {
+        let newPlanId = "";
+        if (plan.price && plan.price > 0) {
+          newPlanId = await this.getOrCreateRazorpayPlan(plan.name, plan.price);
+        }
+
+        if (newPlanId && this.razorpay) {
+          await this.razorpay.subscriptions.update(existingSub.paymentId, {
+            plan_id: newPlanId
+          });
+        }
+      } catch (err) {
+        console.warn("Failed to update Razorpay subscription plan", err);
+      }
+    }
+
+    // Update local database — keep endDate, just swap plan type and amount
+    const updatedSub = await this.prisma.tenantSubscription.update({
+      where: { tenantId: tenant.id },
+      data: {
+        planType: actualPlanName,
+        amount: plan.price,
+        endDate: nextBillingDate,
+        // availableCredits is preserved as is
+      }
+    });
+
+    return {
+      success: true,
+      planType: updatedSub.planType,
+      amount: updatedSub.amount,
+      endDate: updatedSub.endDate
+    };
+  }
+
+  private async getOrCreateRazorpayPlan(planName: string, price: number): Promise<string> {
+    if (!this.razorpay) throw new InternalServerErrorException("Razorpay not configured");
+    if (!price || price <= 0) throw new BadRequestException("Plan price must be greater than 0");
+    const amountInPaise = Math.round(price * 118); // 18% GST
+
+    try {
+      const plans = await this.razorpay.plans.all();
+      const existingPlan = plans.items.find((p: any) => p.item.name === planName && p.item.amount === amountInPaise && p.period === 'monthly');
+      if (existingPlan) return existingPlan.id;
+
+      const newPlan = await this.razorpay.plans.create({
+        period: 'monthly',
+        interval: 1,
+        item: {
+          name: planName,
+          amount: amountInPaise,
+          currency: 'INR',
+          description: `TenderLinked ${planName} Plan`
+        }
+      });
+      return newPlan.id;
+    } catch (e) {
+      console.error("Failed to resolve or create Razorpay Plan", e);
+      throw new InternalServerErrorException("Failed to prepare subscription plan");
     }
   }
 }

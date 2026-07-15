@@ -86,6 +86,18 @@ export class PaymentsController {
     );
   }
 
+  @Post('cancel-and-upgrade')
+  async cancelAndUpgrade(@Req() req: any, @Body() body: { userId: string; planType: string }) {
+    this.extractAndVerifyUserId(req, body.userId);
+    return this.paymentsService.cancelAndUpgrade(body.userId, body.planType);
+  }
+
+  @Post('change-plan')
+  async changePlan(@Req() req: any, @Body() body: { userId: string; planType: string }) {
+    this.extractAndVerifyUserId(req, body.userId);
+    return this.paymentsService.changePlanDirectly(body.userId, body.planType);
+  }
+
   @Post('free-activate')
   async freeActivate(@Req() req: any, @Body() body: { userId: string; planType: string }) {
     this.extractAndVerifyUserId(req, body.userId);

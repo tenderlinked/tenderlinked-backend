@@ -15,6 +15,9 @@ async function main() {
       if (sub.status === "ACTIVE" && sub.availableCredits === 0) {
         updateData.availableCredits = matchingPlan.monthlyCredits;
       }
+      if (sub.status === "ACTIVE" && (sub.amount === 5 || sub.amount === null)) {
+        updateData.amount = matchingPlan.price;
+      }
       
       if (Object.keys(updateData).length > 0) {
         await prisma.tenantSubscription.update({

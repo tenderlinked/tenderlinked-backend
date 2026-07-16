@@ -166,25 +166,141 @@ export class CreditsService {
     });
 
     if (!member || !member.tenant?.subscription) {
-      return { availableCredits: 0, tendersViewedThisMonth: 0, maxTenderViews: 0 };
+      return { availableCredits: 0, tendersViewedThisMonth: 0, maxTenderViews: 0, maxKeywords: 3, maxStates: 1, planType: '', unlockedStates: [], unlockedKeywords: [] };
     }
 
     const sub = member.tenant.subscription;
     
     // Get plan limits
     let maxTenderViews = 50; // fallback
+    let maxKeywords = 3;
+    let maxStates = 1;
+
     if (sub.planType) {
       const plan = await this.prisma.pricingPlan.findUnique({ where: { name: sub.planType } });
       if (plan) {
         maxTenderViews = plan.maxTenderViews;
+        maxKeywords = plan.maxKeywords;
+        maxStates = plan.maxStates;
       }
     }
 
     return {
       availableCredits: sub.availableCredits,
       tendersViewedThisMonth: sub.tendersViewedThisMonth,
-      maxTenderViews
+      maxTenderViews,
+      maxKeywords,
+      maxStates,
+      planType: sub.planType || '',
+      unlockedStates: sub.unlockedStates,
+      unlockedKeywords: sub.unlockedKeywords
     };
+  }
+
+  /**
+   * Unlock a state using a free slot or credit
+   */
+  async unlockState(userId: string, state: string) {
+    const usage = await this.getUsage(userId);
+    const member = await this.prisma.tenantMember.findFirst({ where: { userId } });
+    if (!member) throw new NotFoundException('User not found in any tenant');
+
+    if (usage.unlockedStates.includes(state)) {
+      return { success: true, message: 'Already unlocked' };
+    }
+
+    if (usage.unlockedStates.length < usage.maxStates) {
+      // Free unlock
+      await this.prisma.tenantSubscription.upsert({
+        where: { tenantId: member.tenantId },
+        create: {
+          tenantId: member.tenantId,
+          planType: 'BASIC',
+          status: 'ACTIVE',
+          startDate: new Date(),
+          endDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
+          unlockedStates: [state],
+        },
+        update: { unlockedStates: { push: state } }
+      });
+      return { success: true, message: 'State unlocked (Free Slot)' };
+    } else {
+      // Deduct credit
+      if (usage.availableCredits < 1) {
+        throw new BadRequestException('Not enough credits to unlock this state. Please upgrade your plan or buy more credits.');
+      }
+      await this.prisma.$transaction([
+        this.prisma.tenantSubscription.update({
+          where: { tenantId: member.tenantId },
+          data: { 
+            unlockedStates: { push: state },
+            availableCredits: { decrement: 1 } 
+          }
+        }),
+        this.prisma.creditTransaction.create({
+          data: {
+            tenantId: member.tenantId,
+            userId,
+            amount: -1,
+            description: `Unlocked State: ${state}`
+          }
+        })
+      ]);
+      return { success: true, message: 'State unlocked (1 Credit Consumed)' };
+    }
+  }
+
+  /**
+   * Unlock a keyword using a free slot or credit
+   */
+  async unlockKeyword(userId: string, keyword: string) {
+    const usage = await this.getUsage(userId);
+    const member = await this.prisma.tenantMember.findFirst({ where: { userId } });
+    if (!member) throw new NotFoundException('User not found in any tenant');
+
+    if (usage.unlockedKeywords.includes(keyword)) {
+      return { success: true, message: 'Already unlocked' };
+    }
+
+    if (usage.unlockedKeywords.length < usage.maxKeywords) {
+      // Free unlock
+      await this.prisma.tenantSubscription.upsert({
+        where: { tenantId: member.tenantId },
+        create: {
+          tenantId: member.tenantId,
+          planType: 'BASIC',
+          status: 'ACTIVE',
+          startDate: new Date(),
+          endDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
+          unlockedKeywords: [keyword],
+        },
+        update: { unlockedKeywords: { push: keyword } }
+      });
+      return { success: true, message: 'Keyword unlocked (Free Slot)' };
+    } else {
+      // Deduct credit
+      if (usage.availableCredits < 1) {
+        throw new BadRequestException('Not enough credits to unlock this keyword. Please upgrade your plan or buy more credits.');
+      }
+      await this.prisma.$transaction([
+        this.prisma.tenantSubscription.update({
+          where: { tenantId: member.tenantId },
+          data: { 
+            unlockedKeywords: { push: keyword },
+            availableCredits: { decrement: 1 } 
+          }
+        }),
+        this.prisma.creditTransaction.create({
+          data: {
+            tenantId: member.tenantId,
+            userId,
+            amount: -1,
+            description: `Unlocked Keyword: ${keyword}`
+          }
+        })
+      ]);
+      return { success: true, message: 'Keyword unlocked (1 Credit Consumed)' };
+    }
   }
 
   /**

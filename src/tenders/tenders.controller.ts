@@ -9,6 +9,7 @@ import {
   BadRequestException,
   InternalServerErrorException,
   UnauthorizedException,
+  HttpException,
   Req,
   Res,
 } from "@nestjs/common";
@@ -202,10 +203,27 @@ export class TendersController {
       return { success: true, data: tender };
     } catch (error: any) {
       console.error(`[GET /tenders/${id}] Error:`, error);
+      if (error instanceof HttpException) throw error;
       throw new InternalServerErrorException({
         error: "Internal Server Error",
         details: error?.message || String(error),
       });
+    }
+  }
+
+  @Get(':id/ai-status')
+  @ApiOperation({ summary: "Get AI processing status for a specific tender without incrementing view count" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getTenderAiStatus(@Param('id') id: string) {
+    try {
+      const tender = await this.tendersService.getTenderAiStatus(id);
+      if (!tender) {
+        throw new BadRequestException("Tender not found");
+      }
+      return { success: true, data: tender };
+    } catch (error: any) {
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException("Internal Server Error");
     }
   }
 

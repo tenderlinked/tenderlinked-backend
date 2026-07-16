@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Req } from '@nestjs/common';
+import { Controller, Post, Get, Param, Req, Body } from '@nestjs/common';
 import { CreditsService } from './credits.service';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
@@ -59,6 +59,36 @@ export class CreditsController {
     if (!userId) return [];
     
     return this.creditsService.getHistory(userId);
+  }
+
+  @Post('billing/unlock/state')
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: 'Unlock a state using a free slot or credit' })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request (insufficient credits)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async unlockState(@Req() req: any, @Body('state') state: string) {
+    const userId = this.extractUserId(req);
+    if (!userId) return { success: false, message: 'Unauthorized' };
+    if (!state) return { success: false, message: 'State is required' };
+    
+    return this.creditsService.unlockState(userId, state);
+  }
+
+  @Post('billing/unlock/keyword')
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: 'Unlock a keyword using a free slot or credit' })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request (insufficient credits)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async unlockKeyword(@Req() req: any, @Body('keyword') keyword: string) {
+    const userId = this.extractUserId(req);
+    if (!userId) return { success: false, message: 'Unauthorized' };
+    if (!keyword) return { success: false, message: 'Keyword is required' };
+    
+    return this.creditsService.unlockKeyword(userId, keyword);
   }
 
   private extractUserId(req: any): string | null {

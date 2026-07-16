@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import puppeteer from 'puppeteer';
 import { generateAiSummaryHtml, AiSummaryData } from '../queue/templates/ai-summary.template';
 import { PrismaService } from "../prisma/prisma.service";
@@ -195,6 +195,14 @@ export class TendersService {
       orderBy = [{ endDate: "asc" }];
     } else if (sort === "high_value") {
       orderBy = [{ tenderAmount: "desc" }];
+    } else if (sort && sort.includes('_')) {
+      const parts = sort.split('_');
+      const dir = parts.pop() as string;
+      const field = parts.join('_');
+      const validFields = ['startDate', 'endDate', 'tenderAmount', 'title', 'tenderId', 'organisation', 'tenderCategory'];
+      if (validFields.includes(field) && (dir === 'asc' || dir === 'desc')) {
+        orderBy = [{ [field]: dir }];
+      }
     }
 
     const skip = (page - 1) * pageSize;
@@ -205,6 +213,8 @@ export class TendersService {
         where, skip, take, orderBy,
         select: {
           id: true,
+          tenderId: true,
+          tenderRefNumber: true,
           tenderCode: true,
           title: true,
           description: true,
@@ -223,7 +233,8 @@ export class TendersService {
           documentsDownloaded: true,
           tags: true,
           createdAt: true,
-          tenderCategory: true
+          tenderCategory: true,
+          sourceUrl: true
         }
       }),
       this.prisma.tender.count({ where }),
@@ -276,6 +287,7 @@ export class TendersService {
 
     let allowedFields: string[] = [];
     let isUnlockedWithCredit = false;
+    let memberTenantId: string | null = null;
 
     if (userId) {
       const member = await this.prisma.tenantMember.findFirst({
@@ -284,17 +296,58 @@ export class TendersService {
       });
 
       if (member?.tenant?.id) {
+        memberTenantId = member.tenant.id;
         const unlock = await this.prisma.tenantUnlockedTender.findFirst({
           where: { tenantId: member.tenant.id, tenderId: id }
         });
         if (unlock) isUnlockedWithCredit = true;
       }
 
-      if (member?.tenant?.subscription?.planType) {
-        const plan = await this.prisma.pricingPlan.findUnique({
-          where: { name: member.tenant.subscription.planType }
+      if (member?.tenant?.subscription) {
+        const sub = member.tenant.subscription;
+        
+        let plan: any = null;
+        if (sub.planType) {
+          plan = await this.prisma.pricingPlan.findUnique({
+            where: { name: sub.planType }
+          });
+          if (plan) allowedFields = plan.allowedTenderFields;
+        }
+
+        if (!plan) {
+          plan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
+          if (plan) allowedFields = plan.allowedTenderFields;
+        }
+
+        const maxTenderViews = plan?.maxTenderViews || 50;
+
+        // Check if the tender was already viewed
+        const alreadyViewed = await this.prisma.tenantTenderView.findUnique({
+          where: { tenantId_tenderId: { tenantId: member.tenant.id, tenderId: id } }
         });
-        if (plan) allowedFields = plan.allowedTenderFields;
+
+        if (!alreadyViewed) {
+          // Check view limit
+          if (sub.tendersViewedThisMonth >= maxTenderViews) {
+            throw new ForbiddenException({
+              error: "Limit Exceeded",
+              message: "You have reached your maximum tender view limit for this month.",
+              limitReached: true,
+            });
+          }
+
+          // Increment view count and record view
+          await this.prisma.$transaction([
+            this.prisma.tenantTenderView.create({
+              data: { tenantId: member.tenant.id, tenderId: id }
+            }),
+            this.prisma.tenantSubscription.update({
+              where: { id: sub.id },
+              data: { tendersViewedThisMonth: { increment: 1 } }
+            })
+          ]);
+        }
+
       } else {
         const defaultPlan = await this.prisma.pricingPlan.findFirst({ where: { isDefault: true } });
         if (defaultPlan) allowedFields = defaultPlan.allowedTenderFields;
@@ -310,7 +363,25 @@ export class TendersService {
       isApplied: false,
     };
 
+    if (memberTenantId && enhancedTender.id) {
+      const action = await this.prisma.tenantTenderAction.findFirst({
+        where: { tenantId: memberTenantId, tenderId: tender.id }
+      });
+      if (action) {
+        enhancedTender.isBookmarked = action.isBookmarked;
+        enhancedTender.isApplied = action.isApplied;
+      }
+    }
+
     return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
+  }
+
+  async getTenderAiStatus(id: string) {
+    const tender = await this.prisma.tender.findUnique({ 
+      where: { id },
+      select: { id: true, aiProcessed: true, aiSummary: true }
+    });
+    return tender;
   }
 
   async getTenderDocuments(id: string, userId: string | null = null): Promise<{url: string, size: number}[]> {

@@ -39,6 +39,7 @@ model Tenant {
   updatedAt       DateTime @updatedAt
   
   roles           Role[]   // Custom roles created for this tenant
+  savedFilters    SavedFilter[]
 }
 
 model TenantAlertPreference {
@@ -113,6 +114,8 @@ model TenantSubscription {
   // Credits and Usage
   availableCredits       Int @default(0)
   tendersViewedThisMonth Int @default(0)
+  unlockedStates         String[] @default([])
+  unlockedKeywords       String[] @default([])
   
   paymentMethod   String?  // "RAZORPAY_SUB", "MANUAL", etc.
   paymentId       String?  // e.g. Razorpay payment ID / Subscription ID
@@ -158,6 +161,18 @@ model PricingPlan {
   
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+}
+
+model SavedFilter {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?  // The user who created the filter
+  name      String
+  filters   Json     // Storing { states, cities, categories, authorities, keywords, minAmount, maxAmount, searchQuery }
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UserProfile {
@@ -347,6 +362,16 @@ model TenantTenderAction {
   @@unique([tenantId, tenderId])
   @@index([tenantId])
   @@index([tenderId])
+}
+
+model TenantTenderView {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenderId  String
+  viewedAt  DateTime @default(now())
+
+  @@unique([tenantId, tenderId])
+  @@index([tenantId])
 }
 
 model TenantUnlockedTender {

@@ -11,6 +11,8 @@ import archiver = require('archiver');
 import { Response } from "express";
 import { S3Service } from "../aws/s3.service";
 import { BoqProcessorService } from "../queue/boq.processor";
+import { expandSearchQuery } from "../common/utils/query-expansion.util";
+import { generateEmbedding } from "../common/utils/embedding.util";
 
 @Injectable()
 export class TendersService {
@@ -132,9 +134,9 @@ export class TendersService {
       const keywordConditions =
         keywordList.length > 0
           ? [
-              { tags: { hasSome: keywordList } },
+              { aiData: { tags: { hasSome: keywordList } } },
               ...keywordList.map((kw: string) => ({ title: { contains: kw, mode: "insensitive" as const } })),
-              ...keywordList.map((kw: string) => ({ aiSummary: { contains: kw, mode: "insensitive" as const } })),
+              ...keywordList.map((kw: string) => ({ aiData: { aiSummary: { contains: kw, mode: "insensitive" as const } } })),
             ]
           : [];
       if (keywordConditions.length > 0) AND.push({ OR: keywordConditions });
@@ -142,17 +144,52 @@ export class TendersService {
     }
 
     if (search) {
-      AND.push({
-        OR: [
-          { title: { contains: search, mode: "insensitive" } },
-          { description: { contains: search, mode: "insensitive" } },
-          { state: { contains: search, mode: "insensitive" } },
-          { district: { contains: search, mode: "insensitive" } },
-          { city: { contains: search, mode: "insensitive" } },
-          { organisation: { contains: search, mode: "insensitive" } },
-          { tenderCategory: { contains: search, mode: "insensitive" } },
-        ],
-      });
+      let semanticMatchIds: string[] = [];
+      try {
+        const searchVector = await generateEmbedding(search);
+        if (searchVector && searchVector.length === 384) {
+          const vectorStr = `[${searchVector.join(',')}]`;
+          // Fetch top 300 semantically similar tenders (Cosine distance <= 0.4 meaning >= 60% similarity)
+          const matches: any[] = await this.prisma.$queryRawUnsafe(`
+            SELECT "tenderId" as id 
+            FROM "TenderAiData" 
+            WHERE embedding IS NOT NULL 
+            AND embedding <=> '${vectorStr}'::vector < 0.4
+            ORDER BY embedding <=> '${vectorStr}'::vector 
+            LIMIT 300
+          `);
+          semanticMatchIds = matches.map(m => m.id);
+        }
+      } catch (e) {
+        console.warn('[SemanticSearch] Vector query failed, falling back to lexical:', e);
+      }
+
+      let finalOrConditions: any[] = [];
+      try {
+        const expandedTerms = expandSearchQuery(search);
+        const searchConditions = expandedTerms.flatMap(term => {
+          const ftsQuery = term.trim().split(/\s+/).join(' & ');
+          return [
+            { title: { search: ftsQuery } },
+            { description: { search: ftsQuery } },
+            { state: { search: ftsQuery } },
+            { district: { search: ftsQuery } },
+            { city: { search: ftsQuery } },
+            { organisation: { search: ftsQuery } },
+            { tenderCategory: { search: ftsQuery } },
+            { aiData: { tags: { has: term } } }
+          ];
+        });
+        finalOrConditions = [...searchConditions];
+      } catch (e) {
+        console.error("Lexical expansion failed:", e);
+      }
+
+      if (semanticMatchIds.length > 0) {
+        finalOrConditions.push({ id: { in: semanticMatchIds } });
+      }
+
+      AND.push({ OR: finalOrConditions });
     }
 
     // Sidebar keyword filter — each keyword is an OR across all text fields
@@ -229,16 +266,14 @@ export class TendersService {
           tenderPdfUrl: true,
           startDate: true,
           endDate: true,
-          aiSummary: true,
-          documentsDownloaded: true,
-          tags: true,
+          aiData: { select: { aiSummary: true, documentsDownloaded: true, tags: true } },
           createdAt: true,
           tenderCategory: true,
           sourceUrl: true
         }
       }),
       this.prisma.tender.count({ where }),
-      this.prisma.tender.count({ where: { aiProcessed: false } }),
+      this.prisma.tender.count({ where: { OR: [{ aiData: null }, { aiData: { aiProcessed: false } }] } }),
     ]);
 
     if (tenantId && tenders.length > 0) {
@@ -258,6 +293,17 @@ export class TendersService {
     }
 
     const formattedTenders = tenders.map((t: any) => {
+      // Map AI fields to root for backward compatibility
+      if (t.aiData) {
+        t.aiSummary = t.aiData.aiSummary;
+        t.tags = t.aiData.tags;
+        t.documentsDownloaded = t.aiData.documentsDownloaded;
+      } else {
+        t.aiSummary = null;
+        t.tags = [];
+        t.documentsDownloaded = false;
+      }
+
       const hasHighPriorityTag = t.tags && t.tags.some((tag: string) => keywordList.some((kw: string) => tag.toLowerCase().includes(kw.toLowerCase())));
       const titleMatch = keywordList.some((kw: string) => t.title?.toLowerCase().includes(kw.toLowerCase()));
       const summaryMatch = keywordList.some((kw: string) => t.aiSummary?.toLowerCase().includes(kw.toLowerCase()));
@@ -379,18 +425,18 @@ export class TendersService {
   async getTenderAiStatus(id: string) {
     const tender = await this.prisma.tender.findUnique({ 
       where: { id },
-      select: { id: true, aiProcessed: true, aiSummary: true }
+      select: { id: true, aiData: { select: { aiProcessed: true, aiSummary: true } } }
     });
-    return tender;
+    return tender ? { id: tender.id, aiProcessed: tender.aiData?.aiProcessed || false, aiSummary: tender.aiData?.aiSummary } : null;
   }
 
   async getTenderDocuments(id: string, userId: string | null = null): Promise<{url: string, size: number}[]> {
     const tender = await this.prisma.tender.findUnique({
       where: { id },
-      select: { tenderCode: true, id: true, documentsDownloaded: true, state: true }
+      select: { tenderCode: true, id: true, state: true, aiData: { select: { documentsDownloaded: true } } }
     });
     
-    if (!tender || !tender.documentsDownloaded) return [];
+    if (!tender || !tender.aiData?.documentsDownloaded) return [];
 
     let isUnlockedWithCredit = false;
     let allowedFields: string[] = [];
@@ -457,10 +503,10 @@ export class TendersService {
   async downloadAllDocuments(id: string, res: Response): Promise<void> {
     const tender = await this.prisma.tender.findUnique({
       where: { id },
-      select: { tenderCode: true, id: true, documentsDownloaded: true, title: true, tenderId: true, state: true }
+      select: { tenderCode: true, id: true, aiData: { select: { documentsDownloaded: true } }, title: true, tenderId: true, state: true }
     });
     
-    if (!tender || !tender.documentsDownloaded) {
+    if (!tender || !tender.aiData?.documentsDownloaded) {
       res.status(404).json({ success: false, message: "Documents not found" });
       return;
     }
@@ -572,9 +618,10 @@ export class TendersService {
   }
 
   async retryAi(id: string, isState: boolean) {
-    const updated = await this.prisma.tender.update({
-      where: { id },
-      data: { aiProcessed: true, aiError: 'Processing in background' },
+    const updated = await this.prisma.tenderAiData.upsert({
+      where: { tenderId: id },
+      create: { tenderId: id, aiProcessed: true, aiError: 'Processing in background' },
+      update: { aiProcessed: true, aiError: 'Processing in background' },
     });
     // Run the processor asynchronously without awaiting
     this.boqProcessorService.processTender(id).catch(err => {
@@ -586,14 +633,14 @@ export class TendersService {
   async getAiSummaryPdf(id: string): Promise<Buffer> {
     const tender = await this.prisma.tender.findUnique({
       where: { id },
-      include: { boq: true }
+      include: { boq: true, aiData: true }
     });
 
     if (!tender) {
       throw new NotFoundException("Tender not found");
     }
 
-    if (!tender.aiSummary) {
+    if (!tender.aiData?.aiSummary) {
       throw new InternalServerErrorException("AI Summary is not generated yet for this tender");
     }
 
@@ -607,7 +654,7 @@ export class TendersService {
       submissionDate: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A',
       contractPeriod: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A',
       workDescription: tender.title || 'N/A',
-      scopeOfWork: tender.aiSummary ? tender.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
+      scopeOfWork: tender.aiData?.aiSummary ? tender.aiData.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
       keyDates: [
         { label: 'Start Date', value: tender.publishedDate ? new Date(tender.publishedDate).toLocaleDateString() : 'N/A' },
         { label: 'Bid Submission Date', value: tender.docDownloadEndDate ? new Date(tender.docDownloadEndDate).toLocaleDateString() : 'N/A' },
@@ -651,14 +698,14 @@ export class TendersService {
   async getAiSummaryHtmlContent(id: string): Promise<string> {
     const tender = await this.prisma.tender.findUnique({
       where: { id },
-      include: { boq: true }
+      include: { boq: true, aiData: true }
     });
 
     if (!tender) {
       throw new NotFoundException("Tender not found");
     }
 
-    if (!tender.aiSummary) {
+    if (!tender.aiData?.aiSummary) {
       throw new InternalServerErrorException("AI Summary is not generated yet for this tender");
     }
 
@@ -672,7 +719,7 @@ export class TendersService {
       submissionDate: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A',
       contractPeriod: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A',
       workDescription: tender.title || 'N/A',
-      scopeOfWork: tender.aiSummary ? tender.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
+      scopeOfWork: tender.aiData?.aiSummary ? tender.aiData.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
       keyDates: [
         { label: 'Start Date', value: tender.publishedDate ? new Date(tender.publishedDate).toLocaleDateString() : 'N/A' },
         { label: 'Bid Submission Date', value: tender.docDownloadEndDate ? new Date(tender.docDownloadEndDate).toLocaleDateString() : 'N/A' },

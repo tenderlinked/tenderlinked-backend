@@ -31,7 +31,7 @@ export class EmailController {
           title: { contains: kw, mode: "insensitive" as const },
         })),
         ...keywordList.map((kw: string) => ({
-          aiSummary: { contains: kw, mode: "insensitive" as const },
+          aiData: { aiSummary: { contains: kw, mode: "insensitive" as const } },
         })),
       ];
 

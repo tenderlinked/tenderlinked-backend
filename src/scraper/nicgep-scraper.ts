@@ -8,6 +8,7 @@ import { randomDelay } from "./queue";
 import { SessionService } from "./session.service";
 import { ScraperTargetsService } from "./scraper-targets.service";
 import { cleanCityName, parseAmount, extractLocationInfo } from "./utils";
+import { categorizeTender } from "../common/utils/tender-categorizer.util";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -345,10 +346,11 @@ export async function scrapeStateTenders(
       // Dedup check: look up by NICGEP tender ID (not a fake URL)
       const existing = await prisma.tender.findUnique({
         where: { tenderId: nicgepTenderId },
+        include: { aiData: true }
       });
 
       if (existing) {
-        if (existing.documentsDownloaded) {
+        if (existing.aiData?.documentsDownloaded) {
           if (onProgress) onProgress(1, 0);
           continue;
         }
@@ -372,7 +374,7 @@ export async function scrapeStateTenders(
             if (success) {
               await prisma.tender.update({
                 where: { id: existing.id },
-                data: { documentsDownloaded: true }
+                data: { aiData: { upsert: { create: { documentsDownloaded: true }, update: { documentsDownloaded: true } } } }
               });
             }
           } catch (dlErr: any) {
@@ -701,6 +703,9 @@ export async function scrapeStateTenders(
       if (validData) {
         allValidTenders.push(validData);
         try {
+          // Categorize immediately from title+description
+          const catResult = categorizeTender(validData.title, validData.description || '');
+          
           const savedTender = await prisma.tender.upsert({
             where: { tenderId: nicgepTenderId },  // deduplicate by NICGEP's own ID
             update: {
@@ -722,7 +727,8 @@ export async function scrapeStateTenders(
               tenderRefNumber: validData.tenderRefNumber,
               tenderType: validData.tenderType,
               formOfContract: validData.formOfContract,
-              tenderCategory: validData.tenderCategory,
+              tenderCategory: catResult.category, // NLP categorized
+              // tags moved to ai processor
               noOfCovers: validData.noOfCovers,
               paymentMode: validData.paymentMode,
               withdrawalAllowed: validData.withdrawalAllowed,
@@ -796,7 +802,8 @@ export async function scrapeStateTenders(
               tenderRefNumber: validData.tenderRefNumber,
               tenderType: validData.tenderType,
               formOfContract: validData.formOfContract,
-              tenderCategory: validData.tenderCategory,
+              tenderCategory: catResult.category, // NLP categorized
+              // tags moved to ai processor
               noOfCovers: validData.noOfCovers,
               paymentMode: validData.paymentMode,
               withdrawalAllowed: validData.withdrawalAllowed,
@@ -878,7 +885,7 @@ export async function scrapeStateTenders(
               if (success) {
                 await prisma.tender.update({
                   where: { id: savedTender.id },
-                  data: { documentsDownloaded: true }
+                  data: { aiData: { upsert: { create: { documentsDownloaded: true }, update: { documentsDownloaded: true } } } }
                 });
               }
             } catch (dlErr: any) {

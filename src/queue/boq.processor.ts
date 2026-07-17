@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { extractTenderDetailsFromPdf, extractTenderDetailsFromText, ExtractedTenderDetails } from '../scraper/pdf-extractor';
 import { categorizeTender } from '../common/utils/tender-categorizer.util';
+import { generateEmbedding } from '../common/utils/embedding.util';
 import { EmailService } from '../email/email.service';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -37,18 +38,22 @@ export class BoqProcessorService {
       // 1. Fetch S3 Keys
       const stateTitle = tender.state ? tender.state.replace(/\s+/g, '-').toLowerCase() : 'unknown';
       const stateLC = tender.state ? tender.state.toLowerCase().replace(/\s+/g, '-') : 'unknown';
-      const tenderIdPath = tender.tenderId || 'unknown';
-
-      const possiblePrefixes = [
-        `tenders/${stateTitle}/${tenderIdPath}/`,
-        `tenders/${stateLC}/${tenderIdPath}/`,
-        `${stateTitle}/${tenderIdPath}/`,
-        `${stateLC}/${tenderIdPath}/`,
-        `tenderlinked/${stateTitle}/${tenderIdPath}/`,
-        `tenderlinked/${stateLC}/${tenderIdPath}/`,
-        `downloads/${stateTitle}/${tenderIdPath}/`,
-        `downloads/${stateLC}/${tenderIdPath}/`
-      ];
+      const identifiers = [tender.tenderId, tender.tenderCode, tender.id].filter(Boolean);
+      let possiblePrefixes: string[] = [];
+      
+      for (const tId of identifiers) {
+        if (!tId) continue;
+        possiblePrefixes.push(
+          `tenders/${stateTitle}/${tId}/`,
+          `tenders/${stateLC}/${tId}/`,
+          `${stateTitle}/${tId}/`,
+          `${stateLC}/${tId}/`,
+          `tenderlinked/${stateTitle}/${tId}/`,
+          `tenderlinked/${stateLC}/${tId}/`,
+          `downloads/${stateTitle}/${tId}/`,
+          `downloads/${stateLC}/${tId}/`
+        );
+      }
 
       let s3Keys: string[] = [];
       for (const prefix of possiblePrefixes) {
@@ -56,14 +61,26 @@ export class BoqProcessorService {
         if (s3Keys.length > 0) break;
       }
 
-      let targetPdfKey = s3Keys.find(k => k.toLowerCase().endsWith('.pdf'));
+      let targetPdfKey: string | undefined;
+      const pdfKeys = s3Keys.filter(k => k.toLowerCase().endsWith('.pdf'));
+      if (pdfKeys.length > 0) {
+        // Prioritize the main notice document (NIT) instead of parsing random drawings/annexures
+        targetPdfKey = pdfKeys.find(k => {
+          const lowerK = k.toLowerCase();
+          return lowerK.includes('nit') || lowerK.includes('notice') || lowerK.includes('tender');
+        }) || pdfKeys[0]; // Fallback to first PDF if no keywords matched
+      }
+      
       let zipKey = s3Keys.find(k => k.toLowerCase().endsWith('.zip') || k.toLowerCase().endsWith('.rar'));
 
       let details: ExtractedTenderDetails | null = null;
       let boqData: any[] | null = null;
 
       // 2. Process PDF and BOQ based on S3 keys
-      let combinedRawText = `${tender.title} ${tender.description || ''} `;
+      // Keep title and body separate so the categorizer can weight them
+      const tenderTitle = tender.title || '';
+      let bodyText = tender.description || '';
+      let combinedRawText = `${tenderTitle} ${bodyText} `;
       
       if (targetPdfKey || zipKey) {
         const downloadsDir = path.join(process.cwd(), 'downloads');
@@ -97,7 +114,10 @@ export class BoqProcessorService {
                 ),
               ]);
               if (rawTextFromPdf) {
-                combinedRawText += ` ${rawTextFromPdf}`;
+                // Limit to 100,000 characters (~30-50 pages) to ensure efficiency and save DB space
+                const truncatedText = rawTextFromPdf.substring(0, 100000);
+                bodyText += ` ${truncatedText}`;
+                combinedRawText += ` ${truncatedText}`;
               }
             } catch (e) {
               console.warn(`[Queue] Failed to extract text from PDF:`, e);
@@ -108,14 +128,18 @@ export class BoqProcessorService {
         if (zipKey) {
            const zipUrl = await this.s3Service.getPresignedUrl(zipKey);
            boqData = await this.extractBoqFromZip(zipUrl);
-           if (boqData && boqData.length > 0) {
-              combinedRawText += ` ${JSON.stringify(boqData)}`;
-           }
+         if (boqData && boqData.length > 0) {
+            const boqText = JSON.stringify(boqData);
+            bodyText += ` ${boqText}`;
+            combinedRawText += ` ${boqText}`;
+         }
         }
       }
 
-      // Run local keyword-based categorization
-      const categoryResult = categorizeTender(combinedRawText);
+      // Run NLP categorization (Porter Stemming + phrase-priority + title weighting)
+      const categoryResult = categorizeTender(tenderTitle, bodyText);
+      console.log(`[Queue] Category: ${categoryResult.category} (confidence: ${categoryResult.confidence}%) | WorkType: ${categoryResult.workType}`);
+      
       
       details = {
         aiSummary: null, // User requested to bypass LLM for summary
@@ -127,37 +151,61 @@ export class BoqProcessorService {
 
       // 4. Save to Database
       if (details) {
-        const updateData: any = {
+        const aiData: any = {
           aiSummary: details.aiSummary,
           tags: details.tags,
-          tenderCategory: categoryResult.category,
+          aiCategory: categoryResult.category,
           aiProcessed: true,
           aiError: null,
         };
 
         if (targetPdfKey || zipKey) {
-          updateData.documentsDownloaded = true;
+          aiData.documentsDownloaded = true;
         }
 
-        if (details.tenderValue) updateData.tenderValue = details.tenderValue;
-        if (details.emd) updateData.emd = details.emd;
-        if (details.applicationCost) updateData.applicationCost = details.applicationCost;
-
+        const tenderUpdate: any = {};
+        if (details.tenderValue) tenderUpdate.tenderValue = details.tenderValue;
+        if (details.emd) tenderUpdate.emd = details.emd;
+        if (details.applicationCost) tenderUpdate.applicationCost = details.applicationCost;
         if (details.bidOpeningDate) {
           const prefix = tender.description ? `${tender.description} | ` : '';
-          updateData.description = `${prefix}Bid Opening: ${details.bidOpeningDate}`;
+          tenderUpdate.description = `${prefix}Bid Opening: ${details.bidOpeningDate}`;
         }
 
-        const updatedTender = await this.prisma.tender.update({
-          where: { id: tender.id },
-          data: updateData,
+        await this.prisma.tenderAiData.upsert({
+          where: { tenderId: tender.id },
+          create: { tenderId: tender.id, ...aiData },
+          update: aiData,
         });
+
+        if (Object.keys(tenderUpdate).length > 0) {
+          await this.prisma.tender.update({
+            where: { id: tender.id },
+            data: tenderUpdate,
+          });
+        }
+
+        // Generate and save Semantic Vector Embedding
+        const textForEmbedding = `${tenderTitle} ${tender.description || ''} ${categoryResult.category} ${categoryResult.tags.join(' ')}`.trim();
+        const embeddingVector = await generateEmbedding(textForEmbedding);
+        if (embeddingVector && embeddingVector.length === 384) {
+          const vectorStr = `[${embeddingVector.join(',')}]`;
+          await this.prisma.$executeRawUnsafe(`UPDATE "TenderAiData" SET embedding = '${vectorStr}'::vector WHERE "tenderId" = '${tender.id}'`);
+        }
 
         if (boqData && boqData.length > 0) {
            await this.prisma.tenderBoq.upsert({
               where: { tenderId: tender.id },
               update: { boqData: boqData },
               create: { tenderId: tender.id, boqData: boqData }
+           });
+        }
+
+        if (combinedRawText && combinedRawText.trim().length > 0) {
+           await this.prisma.tenderDocumentText.upsert({
+              where: { tenderId: tender.id },
+              update: { rawText: combinedRawText },
+              create: { tenderId: tender.id, rawText: combinedRawText }
            });
         }
 
@@ -180,17 +228,15 @@ export class BoqProcessorService {
           const recipients = await (this.prisma as any).emailRecipient.findMany();
           for (const r of recipients) {
             this.emailService
-              .sendHighPriorityTenderEmail([updatedTender], 'Unified', r.email, r.name, false)
+              .sendHighPriorityTenderEmail([{ ...tender, aiSummary: details.aiSummary }], 'Unified', r.email, r.name, false)
               .catch(console.error);
           }
         }
       } else {
-        await this.prisma.tender.update({
-          where: { id: tender.id },
-          data: {
-            aiProcessed: true,
-            aiError: 'No text or data could be extracted.',
-          },
+        await this.prisma.tenderAiData.upsert({
+          where: { tenderId: tender.id },
+          create: { tenderId: tender.id, aiProcessed: true, aiError: 'No text or data could be extracted.' },
+          update: { aiProcessed: true, aiError: 'No text or data could be extracted.' },
         });
       }
 
@@ -200,14 +246,27 @@ export class BoqProcessorService {
         ? `Gemini ${error.status} Error`
         : error.message || 'Unknown Error';
 
-      await this.prisma.tender.update({
-        where: { id: tender.id },
-        data: { aiError: errorMessage },
+      await this.prisma.tenderAiData.upsert({
+        where: { tenderId: tender.id },
+        create: { tenderId: tender.id, aiError: errorMessage },
+        update: { aiError: errorMessage },
       });
 
       if (isRateLimit) {
         console.warn(`[BoqProcessor] Halting queue processing due to Gemini ${error.status} Rate Limit.`);
         throw new Error('Rate limit hit. Delaying job.');
+      }
+    } finally {
+      // Cleanup: Delete the downloaded PDF file to free up disk space
+      try {
+        const downloadsDir = path.join(process.cwd(), 'downloads');
+        const fileName = `tender_${tender.id}.pdf`;
+        const localPdfPath = path.join(downloadsDir, fileName);
+        if (fs.existsSync(localPdfPath)) {
+          fs.unlinkSync(localPdfPath);
+        }
+      } catch (cleanupErr) {
+        console.error(`[BoqProcessor] Failed to delete temporary PDF file for tender ${tender.id}:`, cleanupErr);
       }
     }
     

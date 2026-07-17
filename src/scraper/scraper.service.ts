@@ -8,6 +8,7 @@ import { ScrapeResult, TenderSchema, ScrapeInstance, ScrapeStatus } from "./type
 import { scrapeStateTenders } from "./nicgep-scraper";
 import { scrapeApStateTenders } from "./apeprocurement-scraper";
 import { v4 as uuidv4 } from 'uuid';
+import { categorizeTender } from '../common/utils/tender-categorizer.util';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SessionService } from "./session.service";
 import * as fs from 'fs';
@@ -238,6 +239,8 @@ export class ScraperService implements OnModuleInit {
               },
             });
             if (!existing) {
+              // Categorize immediately from title+description — no docs needed
+              const catResult = categorizeTender(tender.title, tender.description || '');
               await this.prisma.tender.create({
                 data: {
                   state: "Odisha",
@@ -250,7 +253,7 @@ export class ScraperService implements OnModuleInit {
                   noticePdfUrl: tender.noticePdfUrl,
                   tenderPdfUrl: tender.tenderPdfUrl,
                   sourceUrl: tender.sourceUrl,
-                  aiProcessed: false,
+                  tenderCategory: catResult.category,
                 },
               });
               batchNewTendersCount++;

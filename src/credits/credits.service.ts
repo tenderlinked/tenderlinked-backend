@@ -173,15 +173,16 @@ export class CreditsService {
     
     // Get plan limits
     let maxTenderViews = 50; // fallback
-    let maxKeywords = 3;
-    let maxStates = 1;
+    let maxKeywords = 9999;
+    let maxStates = 9999;
 
     if (sub.planType) {
       const plan = await this.prisma.pricingPlan.findUnique({ where: { name: sub.planType } });
       if (plan) {
         maxTenderViews = plan.maxTenderViews;
-        maxKeywords = plan.maxKeywords;
-        maxStates = plan.maxStates;
+        // Restrictions permanently removed
+        maxKeywords = 9999;
+        maxStates = 9999;
       }
     }
 

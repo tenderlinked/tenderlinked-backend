@@ -4,6 +4,7 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { SessionService } from "./session.service";
 import { cleanCityName, parseAmount } from "./utils";
+import { categorizeTender } from "../common/utils/tender-categorizer.util";
 
 puppeteer.use(StealthPlugin());
 
@@ -208,11 +209,13 @@ export async function scrapeApStateTenders(
 
             try {
                 // Skip logic to avoid processing already fully-downloaded tenders
-                const existing = await prisma.tender.findUnique({ where: { tenderId: row.tenderId } });
-                if (existing && existing.documentsDownloaded) {
+                const existing = await prisma.tender.findUnique({ where: { tenderId: row.tenderId }, include: { aiData: true } });
+                if (existing && existing.aiData?.documentsDownloaded) {
                     if (onProgress) onProgress(1, 0);
                     continue;
                 }
+
+                const catResult = categorizeTender(tenderObj.title, '');
 
                 const savedTender = await prisma.tender.upsert({
                     where: { tenderId: row.tenderId },
@@ -223,7 +226,8 @@ export async function scrapeApStateTenders(
                         tenderValue: tenderObj.tenderValue,
                         tenderAmount: tenderObj.tenderAmount,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: tenderObj.tenderCategory,
+                        tenderCategory: catResult.category,
+                        // tags removed
                         title: tenderObj.title,
                         organisation: tenderObj.organisation,
                     },
@@ -240,7 +244,8 @@ export async function scrapeApStateTenders(
                         tenderAmount: tenderObj.tenderAmount,
                         tenderId: tenderObj.tenderId,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: tenderObj.tenderCategory,
+                        tenderCategory: catResult.category,
+                        // tags removed
                         sourceUrl: tenderObj.sourceUrl,
                     }
                 });
@@ -437,7 +442,7 @@ export async function scrapeApStateTenders(
                             if (downloaded) {
                                 await prisma.tender.update({
                                     where: { id: savedTender.id },
-                                    data: { documentsDownloaded: true }
+                                    data: { aiData: { upsert: { create: { documentsDownloaded: true }, update: { documentsDownloaded: true } } } }
                                 });
                             }
                         } catch (e) {

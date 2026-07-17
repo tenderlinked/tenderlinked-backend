@@ -14,6 +14,7 @@ import * as util from 'util';
 import puppeteer from 'puppeteer';
 import { generateFullAiSummary } from '../scraper/pdf-extractor';
 import { generateAiSummaryHtml } from './templates/ai-summary.template';
+import { categorizeTender } from '../common/utils/tender-categorizer.util';
 
 const execFileAsync = util.promisify(execFile);
 
@@ -35,6 +36,85 @@ export class QueueController {
       return await this.queueService.processQueue();
     } catch (error: any) {
       console.error("[AI Queue] Fatal Error:", error);
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
+  @Post('test-pdf-extractor')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: "Test PDF Text Extraction and NLP Categorization" })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Upload a PDF file to test the extractor',
+        },
+        title: {
+          type: 'string',
+          description: 'Optional tender title for better categorization',
+        }
+      },
+    },
+  })
+  async testPdfExtractor(@UploadedFile() file: any, @Query('title') title?: string) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+    
+    if (!file.originalname.toLowerCase().endsWith('.pdf')) {
+       throw new BadRequestException('File must be a .pdf');
+    }
+
+    try {
+      const tempPdfPath = path.join(os.tmpdir(), `test_extractor_${Date.now()}.pdf`);
+      fs.writeFileSync(tempPdfPath, file.buffer);
+
+      const PDFParser = require("pdf2json");
+      const rawTextFromPdf = await Promise.race([
+        new Promise<string>((resolve, reject) => {
+          const pdfParser = new PDFParser(null, 1);
+          pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
+          pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
+          pdfParser.parseBuffer(fs.readFileSync(tempPdfPath));
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error("pdf2json timeout")), 15000)
+        ),
+      ]);
+
+      // Cleanup
+      if (fs.existsSync(tempPdfPath)) {
+        fs.unlinkSync(tempPdfPath);
+      }
+
+      if (!rawTextFromPdf) {
+         return {
+            success: false,
+            message: "No text extracted. This might be a scanned image.",
+            rawTextLength: 0,
+            textSample: "",
+            categoryResult: null
+         }
+      }
+
+      const truncatedText = rawTextFromPdf.substring(0, 100000);
+      const categoryResult = categorizeTender(title || "Unknown Title", truncatedText);
+
+      return {
+        success: true,
+        message: "Text successfully extracted from PDF.",
+        rawTextLength: rawTextFromPdf.length,
+        textSample: truncatedText.substring(0, 1000) + (truncatedText.length > 1000 ? "..." : ""),
+        categoryResult,
+        fullTextExtracted: rawTextFromPdf
+      };
+
+    } catch (error: any) {
+      console.error(error);
       throw new InternalServerErrorException(error.message);
     }
   }

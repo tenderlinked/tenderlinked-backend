@@ -23,20 +23,21 @@ async function main() {
     if (tenders.length === 0) break;
     
     for (const tender of tenders) {
-      const combinedRawText = `${tender.title} ${tender.description || ''}`;
-      const categoryResult = categorizeTender(combinedRawText);
+      const categoryResult = categorizeTender(tender.title, tender.description || '');
       
-      // If we found a valid category or tags
-      if (categoryResult.tags && categoryResult.tags.length > 0) {
-        await prisma.tender.update({
-          where: { id: tender.id },
-          data: {
-            tags: categoryResult.tags,
-            tenderCategory: categoryResult.category
-          }
-        });
-        updatedCount++;
-      }
+      // Always update to overwrite stale tags from old categorizer
+      await prisma.tender.update({
+        where: { id: tender.id },
+        data: {
+          tenderCategory: categoryResult.category
+        }
+      });
+      await prisma.tenderAiData.upsert({
+        where: { tenderId: tender.id },
+        create: { tenderId: tender.id, tags: categoryResult.tags },
+        update: { tags: categoryResult.tags }
+      });
+      updatedCount++;
       processedCount++;
       
       if (processedCount % 500 === 0) {

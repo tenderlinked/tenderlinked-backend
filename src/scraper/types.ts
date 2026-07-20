@@ -103,6 +103,7 @@ export interface ScrapeInstance {
   sourceUrl: string;
   status: ScrapeStatus;
   source: string;
+  error?: string;
   progress: {
     page: number;
     tendersFound: number;

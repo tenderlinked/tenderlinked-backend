@@ -210,7 +210,9 @@ export async function scrapeStateTenders(
     const limitCount = source === "TEST" ? 10 : rows.length;
     let retryCount = 0;
     let wasStopped = false;
+    let processedCount = 0;
     for (let i = 0; i < limitCount; i++) {
+      processedCount++;
       let currentStatus = getStatus();
       if (currentStatus === "STOPPED") {
         console.log("[NICGEP] Scraper stopped.");
@@ -860,7 +862,8 @@ export async function scrapeStateTenders(
       where: { id: scrapeLog.id },
       data: {
         status: wasStopped ? "STOPPED" : "SUCCESS",
-        tendersFound: allValidTenders.length,
+        tendersFound: processedCount,
+        totalTenders: rows.length,
         newTendersAdded: newTendersCount,
       } as any,
     });

@@ -20,6 +20,26 @@ export class SavedFiltersService {
     }
   }
 
+  async updateSavedFilter(filterId: string, tenantId: string, userId: string, name: string, filters: any) {
+    try {
+      // First ensure the filter belongs to the user/tenant
+      const existing = await this.prisma.savedFilter.findFirst({
+        where: { id: filterId, tenantId, userId }
+      });
+      
+      if (!existing) {
+        throw new Error("Filter not found");
+      }
+
+      return await this.prisma.savedFilter.update({
+        where: { id: filterId },
+        data: { name, filters },
+      });
+    } catch (error) {
+      throw new InternalServerErrorException("Failed to update saved filter");
+    }
+  }
+
   async getSavedFilters(tenantId: string, userId: string) {
     try {
       return await this.prisma.savedFilter.findMany({

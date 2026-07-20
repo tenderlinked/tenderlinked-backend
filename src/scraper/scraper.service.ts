@@ -67,6 +67,11 @@ export class ScraperService implements OnModuleInit {
     for (const [id, instance] of this.activeInstances.entries()) {
       if (instance.status === 'RUNNING' || instance.status === 'PAUSED') {
         instance.status = 'STOPPED';
+        // Eagerly update database so an immediate server restart doesn't mark it FAILED
+        this.prisma.scrapeLog.updateMany({
+          where: { targetRegion: instance.targetName, status: { in: ['RUNNING', 'PAUSED'] } },
+          data: { status: 'STOPPED' }
+        }).catch(e => console.error('[ScraperService] Failed to eagerly update DB to STOPPED:', e));
       }
     }
   }
@@ -97,7 +102,7 @@ export class ScraperService implements OnModuleInit {
           newTendersAdded: log.newTendersAdded || 0,
         },
         startTime: log.createdAt,
-        endTime: log.createdAt,
+        endTime: log.updatedAt,
         error: log.error || undefined
       }));
       
@@ -108,6 +113,16 @@ export class ScraperService implements OnModuleInit {
     const instance = this.activeInstances.get(id);
     if (instance) {
       instance.status = status;
+      if (status === 'STOPPED') {
+        try {
+          await this.prisma.scrapeLog.updateMany({
+            where: { targetRegion: instance.targetName, status: { in: ['RUNNING', 'PAUSED'] } },
+            data: { status: 'STOPPED' }
+          });
+        } catch (e) {
+          console.error('[ScraperService] Failed to eagerly update DB to STOPPED:', e);
+        }
+      }
     } else {
       // If it's not in active instances, it might be a historical log stuck in the DB
       try {

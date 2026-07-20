@@ -429,6 +429,7 @@ model ScrapeLog {
   source        String   @default("AUTO")
   
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
 }
 
 model ScraperTarget {

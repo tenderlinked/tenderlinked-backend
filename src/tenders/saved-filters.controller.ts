@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards, Req, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Req, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SavedFiltersService } from './saved-filters.service';
 import { TenantRoleGuard } from '../auth/guards/tenant-role.guard';
@@ -54,6 +54,19 @@ export class SavedFiltersController {
     }
     const { userId, tenantId } = await this.getUserIdAndTenantId(req);
     return this.savedFiltersService.createSavedFilter(tenantId, userId, body.name, body.filters);
+  }
+
+  @Patch(':id')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: "Update an existing saved filter" })
+  @ApiResponse({ status: 200, description: 'Updated successfully' })
+  async updateFilter(@Req() req: any, @Param('id') id: string, @Body() body: { name: string, filters: any }) {
+    if (!body.name || !body.filters) {
+      throw new BadRequestException("Name and filters are required");
+    }
+    const { userId, tenantId } = await this.getUserIdAndTenantId(req);
+    return this.savedFiltersService.updateSavedFilter(id, tenantId, userId, body.name, body.filters);
   }
 
   @Get()

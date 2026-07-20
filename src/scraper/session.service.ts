@@ -80,6 +80,7 @@ export class SessionService {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         },
         maxRedirects: 5,
+        timeout: 15000, // Fail fast after 15s instead of hanging for 4 mins
       });
 
       const setCookies = res.headers['set-cookie'];
@@ -306,10 +307,8 @@ export class SessionService {
         const sizeKB = (fs.statSync(destPath).size / 1024).toFixed(1);
         this.logger.log(`[${tenderId}] ✅ Saved locally ${docLink.filename} (${sizeKB} KB)`);
         
-        // Upload to S3
-        const safeState = (downloadsSubDir || 'Unknown').toLowerCase();
-        const s3Key = `tenderlinked/${safeState}/${tenderId}/${docLink.filename}`;
-        await this.s3Service.uploadFile(destPath, s3Key, true); // true = delete after upload
+        // We do NOT upload to S3 here. We defer that to the background queue (boq.processor.ts)
+        // to keep the scraper lightning fast and avoid timeouts.
         
         uploadedFiles.push(docLink.filename);
         anySuccess = true;
@@ -318,12 +317,9 @@ export class SessionService {
       // Summary
       if (anySuccess) {
         this.logger.log(
-          `[${tenderId}] ✅ All done. Uploaded ${uploadedFiles.length} file(s) to S3: ${uploadedFiles.join(', ')}`,
+          `[${tenderId}] ✅ All done. Saved ${uploadedFiles.length} file(s) locally for background processing: ${uploadedFiles.join(', ')}`,
         );
-        // Clean up the local tender directory since files are now in S3
-        if (fs.existsSync(tenderDir)) {
-          fs.rmSync(tenderDir, { recursive: true, force: true });
-        }
+        // We do NOT clean up the local directory here. boq.processor.ts will clean it up after S3 upload.
       } else {
         this.logger.error(`[${tenderId}] No documents were downloaded successfully.`);
       }

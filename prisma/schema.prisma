@@ -423,6 +423,7 @@ model ScrapeLog {
   targetRegion  String   // e.g., "Odisha", "Maharashtra"
   status        String
   tendersFound  Int
+  totalTenders  Int      @default(0)
   newTendersAdded Int    @default(0)
   error         String?
   source        String   @default("AUTO")

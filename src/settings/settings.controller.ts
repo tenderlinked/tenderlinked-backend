@@ -35,8 +35,8 @@ export class SettingsController {
   @ApiResponse({ status: 200, description: 'Successful response' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { scrapeIntervalHours: { type: "number", description: "Interval in hours between scrapes" }, smsProvider: { type: "string", description: "SMS provider (MSG91 or TWILIO)", enum: ["MSG91", "TWILIO"] } } } })
-  async updateSettings(@Body() body: { scrapeIntervalHours?: number; smsProvider?: string }) {
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ schema: { properties: { scrapeIntervalHours: { type: "number", description: "Interval in hours between scrapes" }, smsProvider: { type: "string", description: "SMS provider (MSG91 or TWILIO)", enum: ["MSG91", "TWILIO"] }, aiMode: { type: "string", description: "AI Processing Mode", enum: ["local-nlp", "openai-mini", "openai-4o"] } } } })
+  async updateSettings(@Body() body: { scrapeIntervalHours?: number; smsProvider?: string; aiMode?: string }) {
     try {
       return await this.settingsService.updateSettings(body);
     } catch (error: any) {

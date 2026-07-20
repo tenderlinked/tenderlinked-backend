@@ -1,4 +1,5 @@
 import { getIndiaPincode } from 'india-pincode';
+import { PrismaService } from '../prisma/prisma.service';
 
 const pincodeEngine = getIndiaPincode();
 
@@ -208,4 +209,69 @@ export function sanitizeText(text: string | null | undefined): string {
 
 export function extractTenderValue(text: string | null): number {
   return parseAmount(text);
+}
+
+export async function getStateAbbr(prisma: any, stateName: string): Promise<string> {
+  const clean = stateName.trim().toLowerCase();
+  try {
+    const states = await prisma.regionState.findMany({ select: { name: true, code: true } });
+    for (const s of states) {
+      if (s.code && (clean.includes(s.name.toLowerCase()) || s.name.toLowerCase().includes(clean))) {
+        return s.code;
+      }
+    }
+  } catch (e) {
+    // ignore db lookup error and fall back
+  }
+
+  // Fallback map
+  const fallback: Record<string, string> = {
+    'andhra': 'AP', 'arunachal': 'AR', 'assam': 'AS', 'bihar': 'BR',
+    'chandigarh': 'CH', 'chhattisgarh': 'CG', 'dadra': 'DN', 'daman': 'DD',
+    'delhi': 'DL', 'goa': 'GA', 'gujarat': 'GJ', 'haryana': 'HR',
+    'himachal': 'HP', 'jammu': 'JK', 'jharkhand': 'JH', 'karnataka': 'KA',
+    'kerala': 'KL', 'lakshadweep': 'LD', 'madhya': 'MP', 'maharashtra': 'MH',
+    'manipur': 'MN', 'meghalaya': 'ML', 'mizoram': 'MZ', 'nagaland': 'NL',
+    'odisha': 'OD', 'puducherry': 'PY', 'punjab': 'PB', 'rajasthan': 'RJ',
+    'sikkim': 'SK', 'tamil': 'TN', 'telangana': 'TS', 'tripura': 'TR',
+    'uttarakhand': 'UK', 'uttar': 'UP', 'west bengal': 'WB'
+  };
+  for (const [k, code] of Object.entries(fallback)) {
+    if (clean.includes(k)) return code;
+  }
+  return clean.substring(0, 2).toUpperCase(); // default
+}
+
+/**
+ * Generate sequence-based tender code (TL-[STATE]-XXXXXX)
+ * Examples: TL-OD-000001, TL-AP-000001, TL-MH-000001
+ */
+export async function generateTenderCode(prisma: any, stateName: string): Promise<string> {
+  const abbr = await getStateAbbr(prisma, stateName);
+  const prefix = `TL-${abbr}-`;
+
+  const lastTender = await prisma.tender.findFirst({
+    where: {
+      tenderCode: {
+        startsWith: prefix,
+      },
+    },
+    orderBy: {
+      tenderCode: 'desc',
+    },
+    select: {
+      tenderCode: true,
+    },
+  });
+
+  let nextNum = 1;
+  if (lastTender?.tenderCode) {
+    const parts = lastTender.tenderCode.split('-');
+    const lastNum = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(lastNum)) {
+      nextNum = lastNum + 1;
+    }
+  }
+  const padded = String(nextNum).padStart(6, '0');
+  return `${prefix}${padded}`;
 }

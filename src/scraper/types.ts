@@ -106,6 +106,7 @@ export interface ScrapeInstance {
   progress: {
     page: number;
     tendersFound: number;
+    totalTenders: number;
     newTendersAdded: number;
   };
   startTime: Date;

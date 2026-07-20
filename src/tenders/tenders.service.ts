@@ -185,6 +185,13 @@ export class TendersService {
         console.error("Lexical expansion failed:", e);
       }
 
+      // Add direct matching for Tender ID and Tender Code
+      const cleanSearch = search.trim();
+      if (cleanSearch) {
+        finalOrConditions.push({ tenderId: { contains: cleanSearch, mode: 'insensitive' } });
+        finalOrConditions.push({ tenderCode: { contains: cleanSearch, mode: 'insensitive' } });
+      }
+
       if (semanticMatchIds.length > 0) {
         finalOrConditions.push({ id: { in: semanticMatchIds } });
       }
@@ -327,9 +334,20 @@ export class TendersService {
     };
   }
 
-  async getTenderById(id: string, userId?: string | null) {
-    const tender = await this.prisma.tender.findUnique({ where: { id } });
+  async getTenderById(idOrCode: string, userId?: string | null) {
+    const tender = await this.prisma.tender.findFirst({
+      where: {
+        OR: [
+          { id: idOrCode },
+          { tenderId: idOrCode },
+          { tenderCode: idOrCode }
+        ]
+      },
+      include: { aiData: true }
+    });
     if (!tender) return null;
+
+    const id = tender.id;
 
     let allowedFields: string[] = [];
     let isUnlockedWithCredit = false;
@@ -405,6 +423,7 @@ export class TendersService {
 
     const enhancedTender = {
       ...tender,
+      aiSummary: (tender as any).aiData?.aiSummary || null,
       isBookmarked: false,
       isApplied: false,
     };
@@ -709,37 +728,31 @@ export class TendersService {
       throw new InternalServerErrorException("AI Summary is not generated yet for this tender");
     }
 
+    let parsedAiSummary: any = null;
+    if (tender.aiData?.aiSummary) {
+      try {
+        parsedAiSummary = JSON.parse(tender.aiData.aiSummary);
+      } catch (e) {}
+    }
+
     const aiData: AiSummaryData = {
-      authorityName: tender.invitingAuthorityName || 'N/A',
-      tdrNumber: tender.tenderId || tender.tenderCode || 'N/A',
-      location: tender.location || tender.city || 'N/A',
-      tenderValue: tender.tenderValue ? tender.tenderValue.toString() : 'N/A',
-      emd: tender.emd ? tender.emd.toString() : 'N/A',
-      tenderFee: tender.applicationCost || 'N/A',
-      submissionDate: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A',
-      contractPeriod: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A',
-      workDescription: tender.title || 'N/A',
-      scopeOfWork: tender.aiData?.aiSummary ? tender.aiData.aiSummary.split('\n').map(s => s.trim().replace(/^- /, '')).filter(Boolean) : [tender.title || 'N/A'],
-      keyDates: [
-        { label: 'Start Date', value: tender.publishedDate ? new Date(tender.publishedDate).toLocaleDateString() : 'N/A' },
-        { label: 'Bid Submission Date', value: tender.docDownloadEndDate ? new Date(tender.docDownloadEndDate).toLocaleDateString() : 'N/A' },
-        { label: 'Bid Opening Date', value: tender.bidOpeningDate ? new Date(tender.bidOpeningDate).toLocaleDateString() : 'N/A' },
-        { label: 'Closing Date', value: tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A' },
-        { label: 'Contract Period', value: tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A' }
-      ],
-      locationAndContact: [
-        { label: 'City', value: tender.city || 'N/A' },
-        { label: 'State', value: tender.state || 'N/A' },
-        { label: 'Pincode', value: tender.pincode || 'N/A' },
-        { label: 'Address', value: tender.invitingAuthorityAddress || 'N/A' },
-        { label: 'Contact Person', value: tender.invitingAuthorityName || 'N/A' },
-        { label: 'Tender Portal Link', value: tender.sourceUrl || 'N/A' }
-      ],
-      basicDetail: [],
-      finance: [],
-      technicalQualification: [],
-      exemptions: [],
-      documentList: [],
+      authorityName: parsedAiSummary?.authorityName || tender.invitingAuthorityName || 'N/A',
+      tdrNumber: parsedAiSummary?.tdrNumber || tender.tenderId || tender.tenderCode || 'N/A',
+      location: parsedAiSummary?.location || tender.location || tender.city || 'N/A',
+      tenderValue: parsedAiSummary?.tenderValue || (tender.tenderValue ? tender.tenderValue.toString() : 'N/A'),
+      emd: parsedAiSummary?.emd || (tender.emd ? tender.emd.toString() : 'N/A'),
+      tenderFee: parsedAiSummary?.tenderFee || tender.applicationCost || 'N/A',
+      submissionDate: parsedAiSummary?.submissionDate || (tender.endDate ? new Date(tender.endDate).toLocaleDateString() : 'N/A'),
+      contractPeriod: parsedAiSummary?.contractPeriod || (tender.periodOfWorkDays ? `${tender.periodOfWorkDays} Days` : 'N/A'),
+      workDescription: parsedAiSummary?.workDescription || tender.title || 'N/A',
+      scopeOfWork: parsedAiSummary?.scopeOfWork || [tender.title || 'N/A'],
+      keyDates: parsedAiSummary?.keyDates || [],
+      locationAndContact: parsedAiSummary?.locationAndContact || [],
+      basicDetail: parsedAiSummary?.basicDetail || [],
+      finance: parsedAiSummary?.finance || [],
+      technicalQualification: parsedAiSummary?.technicalQualification || [],
+      exemptions: parsedAiSummary?.exemptions || [],
+      documentList: parsedAiSummary?.documentList || [],
       boqItems: tender.boq?.boqData as any[] || []
     };
 
@@ -929,5 +942,87 @@ export class TendersService {
       orderBy: { _count: { organisation: 'desc' } }
     });
     return result.map(r => r.organisation).filter(Boolean);
+  }
+
+  async getRecommendations(idOrCode: string) {
+    const tender = await this.prisma.tender.findFirst({
+      where: {
+        OR: [
+          { id: idOrCode },
+          { tenderId: idOrCode },
+          { tenderCode: idOrCode }
+        ]
+      }
+    });
+    
+    if (!tender) {
+      throw new NotFoundException("Tender not found");
+    }
+
+    const id = tender.id;
+    const now = new Date();
+
+    // Active condition: bid submission (endDate) is in the future, or not specified.
+    const activeCondition = {
+      OR: [
+        { endDate: { gte: now } },
+        { endDate: null },
+      ]
+    };
+
+    const selectFields = {
+      id: true,
+      title: true,
+      tenderValue: true,
+      state: true,
+      district: true,
+      city: true,
+      tenderId: true,
+      tenderCode: true
+    };
+
+    // Related Tenders: Same product category, active, recent
+    const relatedTenders = tender.productCategory ? await this.prisma.tender.findMany({
+      where: {
+        id: { not: id },
+        productCategory: tender.productCategory,
+        ...activeCondition
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+      select: selectFields
+    }) : [];
+
+    const relatedIds = relatedTenders.map(t => t.id);
+
+    // View Also: Same organisation (or state fallback), active, recent, exclude related
+    const viewAlsoWhere: any = {
+      id: { notIn: [id, ...relatedIds] },
+      ...activeCondition
+    };
+
+    if (tender.organisation) {
+      viewAlsoWhere.organisation = tender.organisation;
+    } else if (tender.state) {
+      viewAlsoWhere.state = tender.state;
+    } else {
+      // Fallback if neither organisation nor state is available
+      viewAlsoWhere.organisation = "UNKNOWN"; 
+    }
+
+    let viewAlsoTenders: any[] = [];
+    if (viewAlsoWhere.organisation !== "UNKNOWN") {
+      viewAlsoTenders = await this.prisma.tender.findMany({
+        where: viewAlsoWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+        select: selectFields
+      });
+    }
+
+    return {
+      relatedTenders,
+      viewAlsoTenders
+    };
   }
 }

@@ -1,4 +1,4 @@
-import { Controller, Post, HttpCode, InternalServerErrorException, UseGuards, UseInterceptors, UploadedFile, BadRequestException, Query, Res } from "@nestjs/common";
+import { Controller, Post, HttpCode, InternalServerErrorException, UseGuards, UseInterceptors, UploadedFile, BadRequestException, Query, Res, Body, Get } from "@nestjs/common";
 import type { Response } from 'express';
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
@@ -9,12 +9,14 @@ import { parseBoqExcel, processRawBoqArrays } from "./boq-parser.utils";
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { extractTextWithOcr } from '../common/utils/ocr.util';
 import { execFile } from 'child_process';
 import * as util from 'util';
 import puppeteer from 'puppeteer';
 import { generateFullAiSummary } from '../scraper/pdf-extractor';
 import { generateAiSummaryHtml } from './templates/ai-summary.template';
 import { categorizeTender } from '../common/utils/tender-categorizer.util';
+import { generateOpenAiInsights } from '../common/utils/openai-insights.util';
 
 const execFileAsync = util.promisify(execFile);
 
@@ -74,7 +76,7 @@ export class QueueController {
       fs.writeFileSync(tempPdfPath, file.buffer);
 
       const PDFParser = require("pdf2json");
-      const rawTextFromPdf = await Promise.race([
+      let rawTextFromPdf = await Promise.race([
         new Promise<string>((resolve, reject) => {
           const pdfParser = new PDFParser(null, 1);
           pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
@@ -86,15 +88,21 @@ export class QueueController {
         ),
       ]);
 
+      const textWithoutPageBreaks = rawTextFromPdf ? rawTextFromPdf.replace(/----------------Page \(\d+\) Break----------------/g, '').trim() : '';
+      if (!textWithoutPageBreaks || textWithoutPageBreaks.length < 50) {
+          console.log(`[Test] PDF is scanned image. Running local OCR...`);
+          rawTextFromPdf = await extractTextWithOcr(tempPdfPath);
+      }
+
       // Cleanup
       if (fs.existsSync(tempPdfPath)) {
         fs.unlinkSync(tempPdfPath);
       }
 
-      if (!rawTextFromPdf) {
+      if (!rawTextFromPdf || rawTextFromPdf.trim().length === 0) {
          return {
             success: false,
-            message: "No text extracted. This might be a scanned image.",
+            message: "No text extracted even after OCR. The PDF might be blank or unreadable.",
             rawTextLength: 0,
             textSample: "",
             categoryResult: null
@@ -342,6 +350,281 @@ export class QueueController {
     } catch (error: any) {
       console.error(`[AI Summary] Error generating summary: ${error.message}`);
       res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  // ─── OpenAI Insights Test Endpoint ──────────────────────────────────────────
+
+  @Post('test-openai-insights')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Test OpenAI AI Insights',
+    description: 'Send extracted tender text and get structured AI insights (same format as the tender details page). Also returns token usage and estimated cost so you can compare OpenAI vs Gemini pricing.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        extractedText: {
+          type: 'string',
+          description: 'The raw text extracted from the tender PDF (paste from /test-pdf-extractor endpoint)',
+        },
+        model: {
+          type: 'string',
+          enum: ['gpt-4o-mini', 'gpt-4o'],
+          description: 'OpenAI model to use. gpt-4o-mini is cheapest, gpt-4o is most capable.',
+          default: 'gpt-4o-mini',
+        },
+        maxChars: {
+          type: 'number',
+          description: 'Max characters of text to send to OpenAI. Lower = cheaper & faster. Try 4000 (2 pages), 8000 (5 pages), 20000 (12 pages). Default is 8000.',
+          default: 8000,
+        },
+      },
+      required: ['extractedText'],
+    },
+  })
+  async testOpenAiInsights(
+    @Body('extractedText') extractedText: string,
+    @Body('model') model: 'gpt-4o-mini' | 'gpt-4o' = 'gpt-4o-mini',
+    @Body('maxChars') maxChars: number = 8000,
+  ) {
+    if (!extractedText || extractedText.trim().length < 50) {
+      throw new BadRequestException('extractedText is required and must be at least 50 characters.');
+    }
+
+    try {
+      console.log(`[OpenAI Test] Generating insights using ${model}, maxChars=${maxChars}...`);
+      const charLimit = Number(maxChars) > 0 ? Number(maxChars) : Infinity;
+      const insights = await generateOpenAiInsights(extractedText, model, charLimit);
+
+      return {
+        success: true,
+        model,
+        tokenUsage: insights.tokenUsage,
+        insights,
+      };
+    } catch (error: any) {
+      console.error(`[OpenAI Test] Error:`, error.message);
+      return {
+        success: false,
+        message: error.message,
+      };
+    }
+  }
+
+  // ─── OpenAI ZIP Endpoint ─────────────────────────────────────────────────────
+
+  @Post('test-openai-zip')
+  @HttpCode(200)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Test OpenAI Insights from ZIP file',
+    description: 'Upload a ZIP containing PDFs and/or Excel BOQ files. The endpoint extracts text from ALL PDFs (pdf2json + OCR fallback), parses all BOQ Excel sheets, combines everything and sends to OpenAI for structured insights. Returns token usage & estimated cost.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'ZIP file containing tender PDFs and/or BOQ Excel files',
+        },
+        model: {
+          type: 'string',
+          enum: ['gpt-4o-mini', 'gpt-4o'],
+          default: 'gpt-4o-mini',
+        },
+        maxChars: {
+          type: 'number',
+          description: 'Max characters of combined text to send to OpenAI (default: 8000)',
+          default: 8000,
+        },
+      },
+      required: ['file'],
+    },
+  })
+  async testOpenAiZip(
+    @UploadedFile() file: any,
+    @Body('model') model: 'gpt-4o-mini' | 'gpt-4o' = 'gpt-4o-mini',
+    @Body('maxChars') maxChars: number = 8000,
+  ) {
+    if (!file || !file.originalname.toLowerCase().endsWith('.zip')) {
+      throw new BadRequestException('A valid .zip file is required');
+    }
+
+    try {
+      const zip = new AdmZip(file.buffer);
+      const zipEntries = zip.getEntries();
+
+      const allPdfBuffers: Array<{ name: string; buffer: Buffer }> = [];
+      let boqItems: any[] = [];
+      const extractionLog: string[] = [];
+
+      // ── Helper: extract BOQ items from an Excel buffer ──────────────────────
+      const extractBoqFromExcel = (excelBuffer: Buffer, sourceName: string): any[] => {
+        try {
+          const rawRows = parseBoqExcel(excelBuffer);
+          if (!rawRows || rawRows.length === 0) return [];
+          const sampleKeys = Object.keys(rawRows[0]);
+          const find = (row: any, keys: string[]) => {
+            for (const k of sampleKeys) {
+              if (keys.some(kw => k.toLowerCase().includes(kw))) return String(row[k] ?? '').trim();
+            }
+            return '';
+          };
+          return rawRows.map((row: any) => ({
+            slNo:        find(row, ['sl', 'sno', 'sr', 'item no', 's.no', 'no.']),
+            description: find(row, ['description', 'particulars', 'name of work', 'item', 'details', 'work']),
+            unit:        find(row, ['unit', 'uom', 'measure']),
+            quantity:    find(row, ['quantity', 'qty', 'nos', 'number']),
+            rate:        find(row, ['rate', 'unit rate', 'basic rate']),
+            amount:      find(row, ['amount', 'total', 'value', 'cost']),
+          })).filter((r: any) => r.description && r.description.length > 2);
+        } catch {
+          return [];
+        }
+      };
+
+      // ── Scan top-level and nested ZIP entries ────────────────────────────────
+      const processEntries = (entries: any[], prefix = '') => {
+        for (const entry of entries) {
+          const name = entry.entryName.toLowerCase();
+          if (entry.isDirectory) continue;
+
+          if (name.endsWith('.pdf')) {
+            allPdfBuffers.push({ name: entry.entryName, buffer: entry.getData() });
+            extractionLog.push(`📄 Found PDF: ${entry.entryName}`);
+          } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+            const items = extractBoqFromExcel(entry.getData(), entry.entryName);
+            boqItems = [...boqItems, ...items];
+            extractionLog.push(`📊 Found Excel BOQ: ${entry.entryName} → ${items.length} items`);
+          } else if (name.endsWith('.zip')) {
+            try {
+              const nestedZip = new AdmZip(entry.getData());
+              processEntries(nestedZip.getEntries(), `${entry.entryName}/`);
+            } catch {
+              extractionLog.push(`⚠️ Could not open nested ZIP: ${entry.entryName}`);
+            }
+          }
+        }
+      };
+
+      processEntries(zipEntries);
+
+      if (allPdfBuffers.length === 0 && boqItems.length === 0) {
+        throw new BadRequestException('No PDF or BOQ files found inside the ZIP');
+      }
+
+      // ── Extract text from ALL PDFs ───────────────────────────────────────────
+      const PDFParser = require('pdf2json');
+      let combinedPdfText = '';
+
+      for (const { name, buffer } of allPdfBuffers) {
+        const tempPath = path.join(os.tmpdir(), `zip_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`);
+        fs.writeFileSync(tempPath, buffer);
+
+        try {
+          let rawText: string = await Promise.race([
+            new Promise<string>((resolve, reject) => {
+              const pdfParser = new PDFParser(null, 1);
+              pdfParser.on('pdfParser_dataError', (e: any) => reject(e.parserError));
+              pdfParser.on('pdfParser_dataReady', () => resolve(pdfParser.getRawTextContent()));
+              pdfParser.parseBuffer(buffer);
+            }),
+            new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000)),
+          ]);
+
+          // OCR fallback for scanned PDFs
+          const textWithoutBreaks = rawText ? rawText.replace(/----------------Page \(\d+\) Break----------------/g, '').trim() : '';
+          if (!textWithoutBreaks || textWithoutBreaks.length < 50) {
+            extractionLog.push(`🔍 PDF "${name}" is scanned — running OCR...`);
+            rawText = await extractTextWithOcr(tempPath);
+          }
+
+          if (rawText && rawText.trim().length > 0) {
+            combinedPdfText += `\n\n=== PDF: ${name} ===\n${rawText}`;
+            extractionLog.push(`✅ Extracted ${rawText.length} chars from PDF: ${name}`);
+          } else {
+            extractionLog.push(`⚠️ No text extracted from PDF: ${name}`);
+          }
+        } catch (err: any) {
+          extractionLog.push(`❌ Error extracting PDF "${name}": ${err.message}`);
+        } finally {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        }
+      }
+
+      // ── Build combined text with smart budget allocation ─────────────────────
+      // Problem: if PDF fills the entire maxChars limit, BOQ is silently dropped.
+      // Solution: Reserve 30% of the budget for BOQ (if BOQ exists), 70% for PDFs.
+      // If no BOQ, 100% goes to PDFs. This guarantees BOQ always gets included.
+
+      let boqText = '';
+      if (boqItems.length > 0) {
+        const rawBoqText = boqItems.slice(0, 200).map(item =>
+          `${item.slNo || ''} | ${item.description} | Qty: ${item.quantity} | Unit: ${item.unit} | Rate: ${item.rate} | Amount: ${item.amount}`
+        ).join('\n');
+        boqText = `\n\n=== BOQ ITEMS (${boqItems.length} entries) ===\n${rawBoqText}`;
+        extractionLog.push(`✅ Combined ${boqItems.length} BOQ items (${boqText.length} chars)`);
+      }
+
+      const charLimit = Number(maxChars) > 0 ? Number(maxChars) : Infinity;
+
+      let pdfBudget: number;
+      let boqBudget: number;
+
+      if (boqText.length === 0) {
+        // No BOQ — give all to PDF
+        pdfBudget = isFinite(charLimit) ? charLimit : combinedPdfText.length;
+        boqBudget = 0;
+      } else if (!isFinite(charLimit)) {
+        // No limit — send everything
+        pdfBudget = combinedPdfText.length;
+        boqBudget = boqText.length;
+      } else {
+        // Split: 70% PDF, 30% BOQ (minimum 2000 chars for BOQ)
+        boqBudget = Math.min(boqText.length, Math.max(2000, Math.floor(charLimit * 0.30)));
+        pdfBudget = charLimit - boqBudget;
+      }
+
+      const trimmedPdfText = combinedPdfText.substring(0, pdfBudget);
+      const trimmedBoqText = boqText.substring(0, boqBudget);
+      const fullText = `${trimmedPdfText}${trimmedBoqText}`.trim();
+
+      extractionLog.push(`📐 Budget: PDF=${trimmedPdfText.length} chars, BOQ=${trimmedBoqText.length} chars, Total=${fullText.length} chars`);
+
+      if (!fullText || fullText.length < 50) {
+        return {
+          success: false,
+          message: 'Could not extract any readable text from the uploaded ZIP.',
+          extractionLog,
+        };
+      }
+
+      // ── Send to OpenAI ───────────────────────────────────────────────────────
+      extractionLog.push(`🤖 Sending ${fullText.length} chars to OpenAI (${model})...`);
+      const insights = await generateOpenAiInsights(fullText, model, Infinity); // already trimmed above
+
+      return {
+        success: true,
+        model,
+        extractionSummary: {
+          pdfsFound: allPdfBuffers.length,
+          boqItemsFound: boqItems.length,
+          totalCharsExtracted: fullText.length,
+          charsSentToAi: insights.tokenUsage?.inputCharsSent ?? 0,
+          charsSkipped: insights.tokenUsage?.inputCharsSkipped ?? 0,
+        },
+        tokenUsage: insights.tokenUsage,
+        extractionLog,
+        insights,
+      };
+    } catch (error: any) {
+      console.error(`[OpenAI ZIP] Error:`, error.message);
+      return { success: false, message: error.message };
     }
   }
 }

@@ -3,7 +3,7 @@ import { ScrapeResult, ScrapeStatus } from "./types";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { SessionService } from "./session.service";
-import { cleanCityName, parseAmount } from "./utils";
+import { cleanCityName, parseAmount, generateTenderCode } from "./utils";
 import { categorizeTender } from "../common/utils/tender-categorizer.util";
 
 function toTitleCase(str: string | null | undefined): string {
@@ -21,7 +21,7 @@ export async function scrapeApStateTenders(
   target: ScraperTarget,
   source: string = "AUTO",
   getStatus: () => ScrapeStatus = () => "RUNNING",
-  onProgress?: (found: number, added: number) => void
+  onProgress?: (found: number, added: number, totalTenders?: number) => void
 ): Promise<ScrapeResult> {
   const targetRegion = target.name;
   let newTendersCount = 0;
@@ -222,8 +222,6 @@ export async function scrapeApStateTenders(
                     continue;
                 }
 
-                const catResult = categorizeTender(tenderObj.title, '');
-
                 const savedTender = await prisma.tender.upsert({
                     where: { tenderId: row.tenderId },
                     update: {
@@ -233,7 +231,7 @@ export async function scrapeApStateTenders(
                         tenderValue: tenderObj.tenderValue,
                         tenderAmount: tenderObj.tenderAmount,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: catResult.category,
+                        tenderCategory: tenderObj.tenderCategory,
                         // tags removed
                         title: tenderObj.title,
                         organisation: tenderObj.organisation,
@@ -251,16 +249,15 @@ export async function scrapeApStateTenders(
                         tenderAmount: tenderObj.tenderAmount,
                         tenderId: tenderObj.tenderId,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: catResult.category,
+                        tenderCategory: tenderObj.tenderCategory,
                         // tags removed
                         sourceUrl: tenderObj.sourceUrl,
                     }
                 });
                 
                 let finalTenderCode = savedTender.tenderCode;
-                if (!finalTenderCode && savedTender.localId) {
-                    const st = targetRegion.substring(0, 2).toUpperCase();
-                    finalTenderCode = `TL-${st}-${String(savedTender.localId).padStart(6, '0')}`;
+                if (!finalTenderCode) {
+                    finalTenderCode = await generateTenderCode(prisma, targetRegion);
                     await prisma.tender.update({
                         where: { id: savedTender.id },
                         data: { tenderCode: finalTenderCode }

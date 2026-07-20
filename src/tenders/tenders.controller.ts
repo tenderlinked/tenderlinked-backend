@@ -227,6 +227,19 @@ export class TendersController {
     }
   }
 
+  @Get(':id/recommendations')
+  @ApiOperation({ summary: "Get related tenders and view also recommendations for a specific tender" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getTenderRecommendations(@Param('id') id: string) {
+    try {
+      const recommendations = await this.tendersService.getRecommendations(id);
+      return { success: true, data: recommendations };
+    } catch (error: any) {
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException("Internal Server Error");
+    }
+  }
+
   @Get(':id/documents')
   @ApiOperation({ summary: "Get downloaded documents for a specific tender" })
   @ApiResponse({ status: 200, description: 'Successful response' })

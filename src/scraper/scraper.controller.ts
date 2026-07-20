@@ -30,28 +30,49 @@ export class ScraperController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 500, description: 'Internal Server Error' })@UseGuards(TenantRoleGuard)
   @RequirePermissions("tenders:scrape")
-  @ApiBody({ schema: { properties: { targetIds: { type: "array", items: { type: "string" }, description: "Optional array of target IDs" } } } })
+  @ApiBody({ schema: { properties: { 
+    targetIds: { type: "array", items: { type: "string" }, description: "Optional array of target IDs" },
+    aiMode: { type: "string", enum: ["local-nlp", "openai-mini", "openai-4o"], description: "AI processing mode: local-nlp (free), openai-mini (cheap), openai-4o (best quality)", default: "openai-mini" }
+  } } })
   async scrape(
     @Req() req: Request,
-    @Body() body: { targetIds?: string[] } = {}
+    @Body() body: { targetIds?: string[]; aiMode?: string } = {}
   ) {
     const authHeader = req.headers["authorization"];
     const cronSecret = process.env.CRON_SECRET;
     const isCronJob = !!(cronSecret && authHeader === `Bearer ${cronSecret}`);
     const source = isCronJob ? "AUTO" : "MANUAL";
 
+    // Store aiMode in DB so boq.processor can read it for this scrape session
+    let currentAiMode = 'openai-mini';
+    if (body?.aiMode) {
+      currentAiMode = body.aiMode;
+      await this.scraperService['prisma'].systemSetting.upsert({
+        where: { key: 'ACTIVE_AI_MODE' },
+        update: { value: currentAiMode },
+        create: { key: 'ACTIVE_AI_MODE', value: currentAiMode }
+      });
+    } else {
+      const dbMode = await this.scraperService['prisma'].systemSetting.findUnique({
+        where: { key: 'ACTIVE_AI_MODE' }
+      });
+      if (dbMode) currentAiMode = dbMode.value;
+    }
+
     if (body?.targetIds && body.targetIds.length > 0) {
       const result = await this.scraperService.scrapeSpecificTargets(body.targetIds, source);
       return {
         success: true,
-        message: "Scraper started in background",
+        message: `Scraper started in background (AI mode: ${currentAiMode})`,
+        aiMode: currentAiMode,
         districtsProcessed: result.districtsProcessed,
       };
     } else {
       const result = await this.scraperService.runFullScrape(source);
       return {
         success: true,
-        message: "Scraper started in background",
+        message: `Scraper started in background (AI mode: ${currentAiMode})`,
+        aiMode: currentAiMode,
         districtsProcessed: result.districtsProcessed,
       };
     }

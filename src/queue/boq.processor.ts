@@ -12,6 +12,8 @@ import axios from 'axios';
 import { parseBoqExcel } from './boq-parser.utils';
 import { S3Service } from '../aws/s3.service';
 import { pipeline } from 'stream/promises';
+import { extractTextWithOcr } from '../common/utils/ocr.util';
+import { generateOpenAiInsights } from '../common/utils/openai-insights.util';
 
 @Injectable()
 export class BoqProcessorService {
@@ -35,118 +37,197 @@ export class BoqProcessorService {
     }
 
     try {
-      // 1. Fetch S3 Keys
       const stateTitle = tender.state ? tender.state.replace(/\s+/g, '-').toLowerCase() : 'unknown';
-      const stateLC = tender.state ? tender.state.toLowerCase().replace(/\s+/g, '-') : 'unknown';
-      const identifiers = [tender.tenderId, tender.tenderCode, tender.id].filter(Boolean);
-      let possiblePrefixes: string[] = [];
-      
-      for (const tId of identifiers) {
-        if (!tId) continue;
-        possiblePrefixes.push(
-          `tenders/${stateTitle}/${tId}/`,
-          `tenders/${stateLC}/${tId}/`,
-          `${stateTitle}/${tId}/`,
-          `${stateLC}/${tId}/`,
-          `tenderlinked/${stateTitle}/${tId}/`,
-          `tenderlinked/${stateLC}/${tId}/`,
-          `downloads/${stateTitle}/${tId}/`,
-          `downloads/${stateLC}/${tId}/`
-        );
-      }
-
-      let s3Keys: string[] = [];
-      for (const prefix of possiblePrefixes) {
-        s3Keys = await this.s3Service.listObjects(prefix);
-        if (s3Keys.length > 0) break;
-      }
-
-      let targetPdfKey: string | undefined;
-      const pdfKeys = s3Keys.filter(k => k.toLowerCase().endsWith('.pdf'));
-      if (pdfKeys.length > 0) {
-        // Prioritize the main notice document (NIT) instead of parsing random drawings/annexures
-        targetPdfKey = pdfKeys.find(k => {
-          const lowerK = k.toLowerCase();
-          return lowerK.includes('nit') || lowerK.includes('notice') || lowerK.includes('tender');
-        }) || pdfKeys[0]; // Fallback to first PDF if no keywords matched
-      }
-      
-      let zipKey = s3Keys.find(k => k.toLowerCase().endsWith('.zip') || k.toLowerCase().endsWith('.rar'));
+      const safeState = tender.state ? tender.state.toLowerCase() : 'unknown';
+      const tId = tender.tenderCode || tender.id;
 
       let details: ExtractedTenderDetails | null = null;
       let boqData: any[] | null = null;
-
-      // 2. Process PDF and BOQ based on S3 keys
-      // Keep title and body separate so the categorizer can weight them
       const tenderTitle = tender.title || '';
       let bodyText = tender.description || '';
-      let combinedRawText = `${tenderTitle} ${bodyText} `;
       
-      if (targetPdfKey || zipKey) {
-        const downloadsDir = path.join(process.cwd(), 'downloads');
-        if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+      // Inject main table data for better AI context
+      const mainTableText = `
+=== TENDER MAIN TABLE METADATA ===
+Authority: ${tender.invitingAuthorityName || ''}, ${tender.invitingAuthorityAddress || ''}
+Tender Ref No: ${tender.tenderRefNumber || ''}
+Category: ${tender.tenderCategory || ''} / ${tender.productCategory || ''}
+Location: ${tender.location || tender.city || ''}
+Tender Value: ${tender.tenderValue || ''}
+EMD: ${tender.emd || ''}
+Tender Fee: ${tender.applicationCost || ''}
+Contract Period: ${tender.periodOfWorkDays ? tender.periodOfWorkDays + ' days' : ''}
+Bid Submission Start: ${tender.startDate ? tender.startDate.toISOString() : ''}
+Bid Submission End: ${tender.endDate ? tender.endDate.toISOString() : ''}
+Bid Opening Date: ${tender.bidOpeningDate ? tender.bidOpeningDate.toISOString() : ''}
+==================================\n`;
 
-        const fileName = `tender_${tender.id}.pdf`;
-        const localPdfPath = path.join(downloadsDir, fileName);
+      let combinedRawText = `${mainTableText}\n${tenderTitle} ${bodyText} `;
 
-        if (targetPdfKey) {
-          if (!fs.existsSync(localPdfPath)) {
-            try {
-              const stream = await this.s3Service.getObjectStream(targetPdfKey);
-              await pipeline(stream, fs.createWriteStream(localPdfPath));
-            } catch (downloadErr: any) {
-              console.error(`[Queue] Failed to download PDF for ${tender.id} from S3:`, downloadErr.message);
-            }
-          }
+      // 1. Check local persistent directory first (saved by scraper)
+      const localTenderDir = path.join(process.cwd(), 'downloads', safeState, tId);
+      const hasLocalFiles = fs.existsSync(localTenderDir) && fs.readdirSync(localTenderDir).length > 0;
+      
+      let localPdfPath: string | undefined;
+      let localZipPath: string | undefined;
+      let filesToUpload: string[] = [];
 
-          if (fs.existsSync(localPdfPath)) {
-            try {
-              const PDFParser = require("pdf2json");
-              const rawTextFromPdf = await Promise.race([
-                new Promise<string>((resolve, reject) => {
-                  const pdfParser = new PDFParser(null, 1);
-                  pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
-                  pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
-                  pdfParser.parseBuffer(fs.readFileSync(localPdfPath));
-                }),
-                new Promise<string>((_, reject) =>
-                  setTimeout(() => reject(new Error("pdf2json timeout")), 10000)
-                ),
-              ]);
-              if (rawTextFromPdf) {
-                // Limit to 100,000 characters (~30-50 pages) to ensure efficiency and save DB space
-                const truncatedText = rawTextFromPdf.substring(0, 100000);
-                bodyText += ` ${truncatedText}`;
-                combinedRawText += ` ${truncatedText}`;
-              }
-            } catch (e) {
-              console.warn(`[Queue] Failed to extract text from PDF:`, e);
-            }
-          }
+      if (hasLocalFiles) {
+        const files = fs.readdirSync(localTenderDir);
+        filesToUpload = files.map(f => path.join(localTenderDir, f));
+        
+        const pdfFiles = files.filter(f => f.toLowerCase().endsWith('.pdf'));
+        if (pdfFiles.length > 0) {
+          const targetPdf = pdfFiles.find(f => {
+            const lowerF = f.toLowerCase();
+            return lowerF.includes('nit') || lowerF.includes('notice') || lowerF.includes('tender');
+          }) || pdfFiles[0];
+          localPdfPath = path.join(localTenderDir, targetPdf);
         }
+        
+        const zipFile = files.find(f => f.toLowerCase().endsWith('.zip') || f.toLowerCase().endsWith('.rar'));
+        if (zipFile) {
+          localZipPath = path.join(localTenderDir, zipFile);
+        }
+      }
 
-        if (zipKey) {
-           const zipUrl = await this.s3Service.getPresignedUrl(zipKey);
-           boqData = await this.extractBoqFromZip(zipUrl);
-         if (boqData && boqData.length > 0) {
+      // Process PDF
+      if (localPdfPath) {
+        try {
+          const PDFParser = require("pdf2json");
+          let rawTextFromPdf = await Promise.race([
+            new Promise<string>((resolve, reject) => {
+              const pdfParser = new PDFParser(null, 1);
+              pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
+              pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
+              pdfParser.parseBuffer(fs.readFileSync(localPdfPath!));
+            }),
+            new Promise<string>((_, reject) =>
+              setTimeout(() => reject(new Error("pdf2json timeout")), 10000)
+            ),
+          ]);
+
+          // OCR FALLBACK
+          const textWithoutPageBreaks = rawTextFromPdf ? rawTextFromPdf.replace(/----------------Page \(\d+\) Break----------------/g, '').trim() : '';
+          
+          if (!textWithoutPageBreaks || textWithoutPageBreaks.length < 50) {
+            console.log(`[Queue] PDF is scanned image. Running local OCR for ${tender.tenderCode || tender.id}...`);
+            rawTextFromPdf = await extractTextWithOcr(localPdfPath);
+          }
+
+          if (rawTextFromPdf) {
+            const truncatedText = rawTextFromPdf.substring(0, 100000);
+            bodyText += ` ${truncatedText}`;
+            combinedRawText += ` ${truncatedText}`;
+          }
+        } catch (e) {
+          console.warn(`[Queue] Failed to extract text from PDF:`, e);
+        }
+      }
+
+      // Extract BOQ from local ZIP first (if it exists)
+      if (localZipPath && fs.existsSync(localZipPath)) {
+        try {
+          boqData = await this.extractBoqFromZip(localZipPath, true);
+          if (boqData && boqData.length > 0) {
             const boqText = JSON.stringify(boqData);
             bodyText += ` ${boqText}`;
             combinedRawText += ` ${boqText}`;
-         }
+          }
+        } catch (localExtractErr) {
+          console.warn(`[Queue] Failed to extract from local ZIP, will fallback to S3: ${localExtractErr}`);
+        }
+      }
+
+      // Upload ALL local files to S3 and delete them
+      if (hasLocalFiles) {
+        for (const filePath of filesToUpload) {
+          const filename = path.basename(filePath);
+          const s3Key = `tenderlinked/${safeState}/${tId}/${filename}`;
+          
+          try {
+            await this.s3Service.uploadFile(filePath, s3Key, true); // true = delete local file after upload
+            console.log(`[Queue] Uploaded ${filename} to S3 and deleted locally.`);
+            
+            // Fallback: If it's a zip and local extraction failed or wasn't done, try from S3 URL
+            if ((!boqData || boqData.length === 0) && (filename.toLowerCase().endsWith('.zip') || filename.toLowerCase().endsWith('.rar'))) {
+              const zipUrl = await this.s3Service.getPresignedUrl(s3Key);
+              boqData = await this.extractBoqFromZip(zipUrl, false);
+              if (boqData && boqData.length > 0) {
+                const boqText = JSON.stringify(boqData);
+                bodyText += ` ${boqText}`;
+                combinedRawText += ` ${boqText}`;
+              }
+            }
+          } catch (uploadErr: any) {
+            console.error(`[Queue] Failed to upload ${filename} to S3:`, uploadErr.message);
+          }
+        }
+        
+        // Clean up empty directory
+        if (fs.existsSync(localTenderDir)) {
+          fs.rmSync(localTenderDir, { recursive: true, force: true });
         }
       }
 
       // Run NLP categorization (Porter Stemming + phrase-priority + title weighting)
       const categoryResult = categorizeTender(tenderTitle, bodyText);
       console.log(`[Queue] Category: ${categoryResult.category} (confidence: ${categoryResult.confidence}%) | WorkType: ${categoryResult.workType}`);
-      
-      
+
+      // ── AI Processing Mode ───────────────────────────────────────────────────
+      // Reads ACTIVE_AI_MODE set by the admin panel when triggering the scrape:
+      //   'local-nlp'    → free, uses only local NLP categorizer (default if not set)
+      //   'openai-mini'  → gpt-4o-mini: cheap & structured (~$0.001/tender)
+      //   'openai-4o'    → gpt-4o: best quality (~$0.005/tender)
+      const aiModeSetting = await this.prisma.systemSetting.findUnique({
+        where: { key: 'ACTIVE_AI_MODE' }
+      });
+      const aiMode = aiModeSetting ? aiModeSetting.value : (process.env.ACTIVE_AI_MODE || 'openai-mini');
+      console.log(`[Queue] AI mode: ${aiMode}`);
+
+      let openAiInsights: any = null;
+      let openAiSummaryJson: string | null = null;
+
+      if (aiMode === 'openai-mini' || aiMode === 'openai-4o') {
+        const openAiModel = aiMode === 'openai-4o' ? 'gpt-4o' : 'gpt-4o-mini';
+        try {
+          if (combinedRawText && combinedRawText.trim().length > 50) {
+            console.log(`[Queue] Running OpenAI (${openAiModel}) insights for tender ${tender.tenderCode || tender.id}...`);
+
+            // Build BOQ text from boqData
+            let boqText = '';
+            if (boqData && boqData.length > 0) {
+              const boqRows = boqData.slice(0, 200).map((item: any) =>
+                `${item.slNo || ''} | ${item.description || ''} | Qty: ${item.quantity || ''} | Unit: ${item.unit || ''} | Rate: ${item.rate || ''} | Amount: ${item.amount || ''}`
+              ).join('\n');
+              boqText = `\n\n=== BOQ ITEMS (${boqData.length} entries) ===\n${boqRows}`;
+            }
+
+            // Smart budget: 70% PDF, 30% BOQ — guaranteed BOQ inclusion
+            const MAX_CHARS = 20000;
+            const boqBudget = boqText.length > 0 ? Math.min(boqText.length, Math.max(2000, Math.floor(MAX_CHARS * 0.30))) : 0;
+            const pdfBudget = MAX_CHARS - boqBudget;
+            const inputText = `${combinedRawText.substring(0, pdfBudget)}${boqText.substring(0, boqBudget)}`.trim();
+
+            openAiInsights = await generateOpenAiInsights(inputText, openAiModel, Infinity);
+            openAiSummaryJson = JSON.stringify(openAiInsights);
+
+            const usage = openAiInsights.tokenUsage;
+            console.log(`[Queue] OpenAI done — tokens: ${usage?.totalTokens}, cost: $${usage?.actualCostUsd ?? usage?.estimatedCostUsd} (cached: ${usage?.cachedTokens ?? 0})`);
+          }
+        } catch (aiErr: any) {
+          console.warn(`[Queue] OpenAI insights failed for ${tender.tenderCode || tender.id}: ${aiErr.message}. Continuing with NLP only.`);
+        }
+      }
+
       details = {
-        aiSummary: null, // User requested to bypass LLM for summary
-        tags: categoryResult.tags,
-        tenderValue: null,
-        emd: null,
-        applicationCost: null,
+        aiSummary: openAiSummaryJson,
+        tags: openAiInsights?.tags
+          ? [...new Set([...categoryResult.tags, ...openAiInsights.tags])]
+          : categoryResult.tags,
+        tenderValue: openAiInsights?.tenderValue ?? null,
+        emd: openAiInsights?.emd ?? null,
+        applicationCost: openAiInsights?.tenderFee ?? null,
       };
 
       // 4. Save to Database
@@ -159,7 +240,7 @@ export class BoqProcessorService {
           aiError: null,
         };
 
-        if (targetPdfKey || zipKey) {
+        if (hasLocalFiles) {
           aiData.documentsDownloaded = true;
         }
 
@@ -273,18 +354,26 @@ export class BoqProcessorService {
     return { success: true };
   }
 
-  async extractBoqFromZip(zipUrl: string): Promise<any[]> {
+  async extractBoqFromZip(source: string, isLocal = false): Promise<any[]> {
     try {
-      console.log(`[BoqProcessor] Downloading ZIP from ${zipUrl}...`);
-      const response = await axios.get(zipUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-        },
-      });
+      let zipBuffer: Buffer;
+      
+      if (isLocal) {
+        console.log(`[BoqProcessor] Loading local ZIP from ${source}...`);
+        zipBuffer = fs.readFileSync(source);
+      } else {
+        console.log(`[BoqProcessor] Downloading ZIP from ${source}...`);
+        const response = await axios.get(source, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+          },
+        });
+        zipBuffer = response.data;
+      }
 
-      const zip = new AdmZip(response.data);
+      const zip = new AdmZip(zipBuffer);
       const zipEntries = zip.getEntries();
       let boqExcelBuffer: Buffer | null = null;
 

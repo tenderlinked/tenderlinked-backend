@@ -215,8 +215,6 @@ export async function scrapeApStateTenders(
                     continue;
                 }
 
-                const catResult = categorizeTender(tenderObj.title, '');
-
                 const savedTender = await prisma.tender.upsert({
                     where: { tenderId: row.tenderId },
                     update: {
@@ -226,7 +224,7 @@ export async function scrapeApStateTenders(
                         tenderValue: tenderObj.tenderValue,
                         tenderAmount: tenderObj.tenderAmount,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: catResult.category,
+                        tenderCategory: tenderObj.tenderCategory,
                         // tags removed
                         title: tenderObj.title,
                         organisation: tenderObj.organisation,
@@ -244,7 +242,7 @@ export async function scrapeApStateTenders(
                         tenderAmount: tenderObj.tenderAmount,
                         tenderId: tenderObj.tenderId,
                         tenderRefNumber: tenderObj.tenderRefNumber,
-                        tenderCategory: catResult.category,
+                        tenderCategory: tenderObj.tenderCategory,
                         // tags removed
                         sourceUrl: tenderObj.sourceUrl,
                     }

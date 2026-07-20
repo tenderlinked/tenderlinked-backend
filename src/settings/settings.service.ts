@@ -16,10 +16,15 @@ export class SettingsService {
     });
     const smsProvider = smsProviderSetting ? smsProviderSetting.value : "MSG91";
 
-    return { success: true, scrapeIntervalHours: interval, smsProvider };
+    const aiModeSetting = await this.prisma.systemSetting.findUnique({
+      where: { key: "ACTIVE_AI_MODE" },
+    });
+    const aiMode = aiModeSetting ? aiModeSetting.value : "openai-mini";
+
+    return { success: true, scrapeIntervalHours: interval, smsProvider, aiMode };
   }
 
-  async updateSettings(body: { scrapeIntervalHours?: number; smsProvider?: string }) {
+  async updateSettings(body: { scrapeIntervalHours?: number; smsProvider?: string; aiMode?: string }) {
     if (body.scrapeIntervalHours !== undefined) {
       const valueStr = body.scrapeIntervalHours.toString();
       await this.prisma.systemSetting.upsert({
@@ -35,6 +40,14 @@ export class SettingsService {
         where: { key: "SMS_PROVIDER" },
         update: { value: valueStr },
         create: { key: "SMS_PROVIDER", value: valueStr },
+      });
+    }
+
+    if (body.aiMode !== undefined) {
+      await this.prisma.systemSetting.upsert({
+        where: { key: "ACTIVE_AI_MODE" },
+        update: { value: body.aiMode },
+        create: { key: "ACTIVE_AI_MODE", value: body.aiMode },
       });
     }
     

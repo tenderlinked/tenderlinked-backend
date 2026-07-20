@@ -7,7 +7,7 @@ import { ScrapeResult, ScrapeStatus, TenderSchema } from "./types";
 import { randomDelay } from "./queue";
 import { SessionService } from "./session.service";
 import { ScraperTargetsService } from "./scraper-targets.service";
-import { cleanCityName, parseAmount, extractLocationInfo } from "./utils";
+import { cleanCityName, parseAmount, extractLocationInfo, generateTenderCode } from "./utils";
 import { categorizeTender } from "../common/utils/tender-categorizer.util";
 
 const USER_AGENT =
@@ -77,77 +77,6 @@ function norm(str: string | undefined | null): string | null {
   return s;
 }
 
-/**
- * Get standard 2-letter state abbreviation by checking RegionState table in DB,
- * with standard Indian state map as fallback.
- */
-async function getStateAbbr(prisma: PrismaService, stateName: string): Promise<string> {
-  const clean = stateName.trim().toLowerCase();
-  try {
-    const states = await prisma.regionState.findMany({ select: { name: true, code: true } });
-    for (const s of states) {
-      if (s.code && (clean.includes(s.name.toLowerCase()) || s.name.toLowerCase().includes(clean))) {
-        return s.code;
-      }
-    }
-  } catch (e) {
-    // ignore db lookup error and fall back
-  }
-
-  // Fallback map
-  const fallback: Record<string, string> = {
-    'andhra': 'AP', 'arunachal': 'AR', 'assam': 'AS', 'bihar': 'BR',
-    'chandigarh': 'CH', 'chhattisgarh': 'CG', 'dadra': 'DN', 'daman': 'DD',
-    'delhi': 'DL', 'goa': 'GA', 'gujarat': 'GJ', 'haryana': 'HR',
-    'himachal': 'HP', 'jammu': 'JK', 'jharkhand': 'JH', 'karnataka': 'KA',
-    'kerala': 'KL', 'lakshadweep': 'LD', 'madhya': 'MP', 'maharashtra': 'MH',
-    'manipur': 'MN', 'meghalaya': 'ML', 'mizoram': 'MZ', 'nagaland': 'NL',
-    'odisha': 'OD', 'puducherry': 'PY', 'punjab': 'PB', 'rajasthan': 'RJ',
-    'sikkim': 'SK', 'tamil': 'TN', 'telangana': 'TS', 'tripura': 'TR',
-    'uttarakhand': 'UK', 'uttar': 'UP', 'west bengal': 'WB'
-  };
-  for (const [k, code] of Object.entries(fallback)) {
-    if (clean.includes(k)) return code;
-  }
-
-  // Default to first 2 characters uppercase
-  return stateName.trim().substring(0, 2).toUpperCase();
-}
-
-/**
- * Generate a human-readable tender reference code with per-state numbering.
- * Format: TL-{StateAbbr}-{6-digit-sequence}
- * Examples: TL-OD-000001, TL-AP-000001, TL-MH-000001
- */
-async function generateTenderCode(prisma: PrismaService, stateName: string): Promise<string> {
-  const abbr = await getStateAbbr(prisma, stateName);
-  const prefix = `TL-${abbr}-`;
-
-  const lastTender = await prisma.tender.findFirst({
-    where: {
-      tenderCode: {
-        startsWith: prefix,
-      },
-    },
-    orderBy: {
-      tenderCode: 'desc',
-    },
-    select: {
-      tenderCode: true,
-    },
-  });
-
-  let nextNum = 1;
-  if (lastTender?.tenderCode) {
-    const parts = lastTender.tenderCode.split('-');
-    const lastNum = parseInt(parts[parts.length - 1], 10);
-    if (!isNaN(lastNum)) {
-      nextNum = lastNum + 1;
-    }
-  }
-  const padded = String(nextNum).padStart(6, '0');
-  return `${prefix}${padded}`;
-}
 
 // ─── Scraper ─────────────────────────────────────────────────────────────────
 
@@ -157,7 +86,7 @@ export async function scrapeStateTenders(
   target: { id?: string; name: string; url: string; regionStateId?: string | null; regionDistrictId?: string | null; type?: string },
   source: string = "AUTO",
   getStatus: () => ScrapeStatus = () => "RUNNING",
-  onProgress?: (found: number, added: number) => void
+  onProgress?: (found: number, added: number, totalTenders?: number) => void
 ): Promise<ScrapeResult> {
   const targetRegion = target.name;
   const stateSlug = targetRegion
@@ -242,6 +171,7 @@ export async function scrapeStateTenders(
     const tenderRes = await axios.get(
       `${baseUrl}/nicgep/app?component=%24DirectLink&page=FrontEndTendersByOrganisation&service=direct&session=T&sp`,
       {
+        timeout: 15000,
         headers: {
           "User-Agent": USER_AGENT,
           Cookie: cookieStr || "",
@@ -267,6 +197,15 @@ export async function scrapeStateTenders(
     }
 
     console.log(`[NICGEP] Found ${rows.length} tenders. Processing...`);
+
+    // Initial update to let the UI know the total count
+    if (onProgress) {
+      onProgress(
+        1,
+        allValidTenders.length,
+        rows.length
+      );
+    }
 
     const limitCount = source === "TEST" ? 10 : rows.length;
     let retryCount = 0;
@@ -400,6 +339,7 @@ export async function scrapeStateTenders(
         try {
           const activeCookieStr = await sessionService.getValidSessionCookie(baseUrl);
           const detailRes = await axios.get(detailUrl, {
+            timeout: 15000,
             headers: { "User-Agent": USER_AGENT, Cookie: activeCookieStr || "" },
           });
           if (detailRes.headers["set-cookie"]) {
@@ -532,7 +472,6 @@ export async function scrapeStateTenders(
 
       // ── Map all extracted fields ─────────────────────────────────────
       const d = detailData;
-      console.log(`[DEBUG NICGEP KEYS] Extracted keys for ${cleanTitle}:`, Object.keys(d));
 
       const findKeyByRegex = (regex: RegExp): string | undefined => {
         for (const k of Object.keys(d)) {
@@ -703,9 +642,7 @@ export async function scrapeStateTenders(
       if (validData) {
         allValidTenders.push(validData);
         try {
-          // Categorize immediately from title+description
-          const catResult = categorizeTender(validData.title, validData.description || '');
-          
+          // (AI categorization removed per user request to keep original category)
           const savedTender = await prisma.tender.upsert({
             where: { tenderId: nicgepTenderId },  // deduplicate by NICGEP's own ID
             update: {
@@ -727,8 +664,7 @@ export async function scrapeStateTenders(
               tenderRefNumber: validData.tenderRefNumber,
               tenderType: validData.tenderType,
               formOfContract: validData.formOfContract,
-              tenderCategory: catResult.category, // NLP categorized
-              // tags moved to ai processor
+              tenderCategory: validData.tenderCategory, // Keep original scraped category
               noOfCovers: validData.noOfCovers,
               paymentMode: validData.paymentMode,
               withdrawalAllowed: validData.withdrawalAllowed,
@@ -802,7 +738,7 @@ export async function scrapeStateTenders(
               tenderRefNumber: validData.tenderRefNumber,
               tenderType: validData.tenderType,
               formOfContract: validData.formOfContract,
-              tenderCategory: catResult.category, // NLP categorized
+              tenderCategory: validData.tenderCategory, 
               // tags moved to ai processor
               noOfCovers: validData.noOfCovers,
               paymentMode: validData.paymentMode,

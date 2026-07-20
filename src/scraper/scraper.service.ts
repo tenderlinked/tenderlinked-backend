@@ -93,6 +93,7 @@ export class ScraperService implements OnModuleInit {
         progress: {
           page: 0,
           tendersFound: log.tendersFound,
+          totalTenders: log.totalTenders || 0,
           newTendersAdded: log.newTendersAdded || 0,
         },
         startTime: log.createdAt,
@@ -240,21 +241,20 @@ export class ScraperService implements OnModuleInit {
             });
             if (!existing) {
               // Categorize immediately from title+description — no docs needed
-              const catResult = categorizeTender(tender.title, tender.description || '');
               await this.prisma.tender.create({
-                data: {
-                  state: "Odisha",
-                  level: "DISTRICT",
-                  district: tender.district,
-                  title: tender.title,
-                  description: tender.description,
-                  startDate: tender.startDate,
-                  endDate: tender.endDate,
-                  noticePdfUrl: tender.noticePdfUrl,
-                  tenderPdfUrl: tender.tenderPdfUrl,
-                  sourceUrl: tender.sourceUrl,
-                  tenderCategory: catResult.category,
-                },
+                  data: {
+                    state: "Odisha",
+                    level: "DISTRICT",
+                    district: tender.district,
+                    title: tender.title,
+                    description: tender.description,
+                    startDate: tender.startDate,
+                    endDate: tender.endDate,
+                    noticePdfUrl: tender.noticePdfUrl,
+                    tenderPdfUrl: tender.tenderPdfUrl,
+                    sourceUrl: tender.sourceUrl,
+                    tenderCategory: tender.tenderCategory, // Keep original category
+                  },
               });
               batchNewTendersCount++;
               totalNewTendersCount++;
@@ -347,7 +347,7 @@ export class ScraperService implements OnModuleInit {
       sourceUrl: target.url,
       status: initialStatus,
       source,
-      progress: { page: 0, tendersFound: 0, newTendersAdded: 0 },
+      progress: { page: 0, tendersFound: 0, totalTenders: 0, newTendersAdded: 0 },
       startTime: new Date()
     };
     this.activeInstances.set(id, instance);
@@ -394,11 +394,14 @@ export class ScraperService implements OnModuleInit {
            const current = this.activeInstances.get(instance.id);
            return current ? current.status : 'RUNNING';
         };
-        const onProgress = (found: number, added: number) => {
+        const onProgress = (found: number, added: number, totalTenders?: number) => {
            const current = this.activeInstances.get(instance.id);
            if (current) {
              current.progress.tendersFound += found;
              current.progress.newTendersAdded += added;
+             if (totalTenders !== undefined) {
+               current.progress.totalTenders = totalTenders;
+             }
            }
         };
 
@@ -515,11 +518,14 @@ export class ScraperService implements OnModuleInit {
            const current = this.activeInstances.get(instance.id);
            return current ? current.status : 'RUNNING';
         };
-        const onProgress = (found: number, added: number) => {
+        const onProgress = (found: number, added: number, totalTenders?: number) => {
            const current = this.activeInstances.get(instance.id);
            if (current) {
              current.progress.tendersFound += found;
              current.progress.newTendersAdded += added;
+             if (totalTenders !== undefined) {
+               current.progress.totalTenders = totalTenders;
+             }
            }
         };
 

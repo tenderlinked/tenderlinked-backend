@@ -11,7 +11,6 @@ export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], is
     'tenderValue',
     'emd',
     'applicationCost',
-    'aiSummary',
     'tags'
   ];
 
@@ -28,6 +27,11 @@ export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], is
         redactedTender[field] = REDACTED_PLACEHOLDER;
       }
     }
+  }
+
+  // AI Summary ALWAYS requires a credit unlock, regardless of plan
+  if (redactedTender.aiSummary && !isUnlockedWithCredit) {
+    redactedTender.aiSummary = REDACTED_PLACEHOLDER;
   }
 
   // Document fields are gated behind credits if they aren't explicitly allowed by the plan

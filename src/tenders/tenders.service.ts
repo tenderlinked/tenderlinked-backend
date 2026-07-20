@@ -410,6 +410,12 @@ export class TendersService {
               data: { tendersViewedThisMonth: { increment: 1 } }
             })
           ]);
+        } else {
+          // Update the viewedAt timestamp so it bubbles up in recently visited
+          await this.prisma.tenantTenderView.update({
+            where: { id: alreadyViewed.id },
+            data: { viewedAt: new Date() }
+          });
         }
 
       } else {
@@ -977,6 +983,8 @@ export class TendersService {
       state: true,
       district: true,
       city: true,
+      location: true,
+      endDate: true,
       tenderId: true,
       tenderCode: true
     };
@@ -989,7 +997,7 @@ export class TendersService {
         ...activeCondition
       },
       orderBy: { createdAt: 'desc' },
-      take: 3,
+      take: 10,
       select: selectFields
     }) : [];
 
@@ -1015,7 +1023,7 @@ export class TendersService {
       viewAlsoTenders = await this.prisma.tender.findMany({
         where: viewAlsoWhere,
         orderBy: { createdAt: 'desc' },
-        take: 3,
+        take: 10,
         select: selectFields
       });
     }
@@ -1024,5 +1032,41 @@ export class TendersService {
       relatedTenders,
       viewAlsoTenders
     };
+  }
+
+  async getRecentlyViewedTenders(userId: string) {
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { userId }
+    });
+    
+    if (!member?.tenantId) return [];
+
+    const views = await this.prisma.tenantTenderView.findMany({
+      where: { tenantId: member.tenantId },
+      orderBy: { viewedAt: 'desc' },
+      take: 6,
+    });
+
+    if (views.length === 0) return [];
+
+    const tenderIds = views.map(v => v.tenderId);
+    
+    const tenders = await this.prisma.tender.findMany({
+      where: { id: { in: tenderIds } },
+      select: {
+        id: true,
+        title: true,
+        tenderId: true,
+        tenderCode: true,
+        endDate: true,
+        location: true,
+        city: true,
+        state: true
+      }
+    });
+
+    // Map back to the sorted order of views
+    const tenderMap = new Map(tenders.map(t => [t.id, t]));
+    return views.map(v => tenderMap.get(v.tenderId)).filter(Boolean);
   }
 }

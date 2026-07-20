@@ -171,6 +171,37 @@ export class TendersController {
     return this.tendersService.getAuthorities(state);
   }
 
+  @Get('recently-viewed')
+  @UseGuards(TenantRoleGuard)
+  @RequirePermissions('tenders:read')
+  @ApiOperation({ summary: "Get recently viewed tenders for the current user" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getRecentlyViewedTenders(@Req() req: any) {
+    let userId: string | null = null;
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        userId = decodedPayload.sub;
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    if (!userId) {
+      throw new UnauthorizedException("User not authenticated");
+    }
+
+    try {
+      const data = await this.tendersService.getRecentlyViewedTenders(userId);
+      return { success: true, data };
+    } catch (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
   @Get(':id')
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
@@ -459,6 +490,35 @@ export class TendersController {
       res.send(htmlString);
     } catch (error: any) {
       console.error("[GET /tenders/:id/ai-summary-html] Error:", error.message);
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
+  // -------------------------------------------------
+  //  UNLOCK AI SUMMARY
+  // -------------------------------------------------
+  @Post(':id/unlock-ai')
+  @UseGuards(TenantRoleGuard)
+  @ApiOperation({ summary: "Unlock AI Summary with Credit" })
+  @ApiResponse({ status: 200, description: 'Successful unlock' })
+  async unlockAiSummary(@Param("id") id: string, @Req() req: any) {
+    try {
+      const authHeader = req?.headers?.['authorization'];
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new UnauthorizedException('Missing token');
+      }
+      const token = authHeader.split(' ')[1];
+      const payloadBase64 = token.split('.')[1];
+      const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+      const userId = decodedPayload.sub;
+      if (!userId) throw new UnauthorizedException('Invalid token payload');
+
+      // We use the existing credits service which handles deducting a credit 
+      // and permanently recording the unlock in TenantUnlockedTender
+      return await this.creditsService.unlockTender(userId, id);
+    } catch (error: any) {
+      console.error("[POST /tenders/:id/unlock-ai] Error:", error.message);
+      if (error instanceof HttpException) throw error;
       throw new InternalServerErrorException(error.message);
     }
   }

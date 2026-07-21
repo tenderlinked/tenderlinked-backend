@@ -71,4 +71,13 @@ export class QueueService {
       message: `Dispatched ${allPending.length} jobs to background sequential worker.`
     };
   }
+
+  async processSingleTender(tenderId: string) {
+    try {
+      return await this.boqProcessorService.processTender(tenderId);
+    } catch (err: any) {
+      this.logger.error(`[QueueService] Failed to process single tender ${tenderId}:`, err);
+      throw err;
+    }
+  }
 }

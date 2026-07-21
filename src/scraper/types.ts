@@ -91,6 +91,7 @@ export interface ScrapeResult {
   tenders: ParsedTender[];
   newTendersCount?: number;
   error?: string;
+  scrapeLogId?: string;
 }
 
 export type ScrapeStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'STOPPED' | 'FAILED' | 'SUCCESS';
@@ -103,7 +104,7 @@ export interface ScrapeInstance {
   sourceUrl: string;
   status: ScrapeStatus;
   source: string;
-  error?: string;
+  scrapeLogId?: string;   // The DB scrapeLog ID for this active run
   progress: {
     page: number;
     tendersFound: number;

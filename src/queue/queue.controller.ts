@@ -1,4 +1,4 @@
-import { Controller, Post, HttpCode, InternalServerErrorException, UseGuards, UseInterceptors, UploadedFile, BadRequestException, Query, Res, Body, Get } from "@nestjs/common";
+import { Controller, Post, HttpCode, InternalServerErrorException, UseGuards, UseInterceptors, UploadedFile, BadRequestException, Query, Res, Body, Get, Param } from "@nestjs/common";
 import type { Response } from 'express';
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
@@ -17,6 +17,7 @@ import { generateFullAiSummary } from '../scraper/pdf-extractor';
 import { generateAiSummaryHtml } from './templates/ai-summary.template';
 import { categorizeTender } from '../common/utils/tender-categorizer.util';
 import { generateOpenAiInsights } from '../common/utils/openai-insights.util';
+import * as mammoth from 'mammoth';
 
 const execFileAsync = util.promisify(execFile);
 
@@ -38,6 +39,20 @@ export class QueueController {
       return await this.queueService.processQueue();
     } catch (error: any) {
       console.error("[AI Queue] Fatal Error:", error);
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
+  @Post('process-tender/:id')
+  @HttpCode(200)
+  @ApiOperation({ summary: "Process AI generation for a specific tender by ID" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async processSingleTender(@Param('id') id: string) {
+    try {
+      return await this.queueService.processSingleTender(id);
+    } catch (error: any) {
+      console.error(`[AI Queue] Fatal Error processing tender ${id}:`, error);
       throw new InternalServerErrorException(error.message);
     }
   }
@@ -460,6 +475,7 @@ export class QueueController {
       const zipEntries = zip.getEntries();
 
       const allPdfBuffers: Array<{ name: string; buffer: Buffer }> = [];
+      const allDocBuffers: Array<{ name: string; buffer: Buffer }> = [];
       let boqItems: any[] = [];
       const extractionLog: string[] = [];
 
@@ -497,6 +513,9 @@ export class QueueController {
           if (name.endsWith('.pdf')) {
             allPdfBuffers.push({ name: entry.entryName, buffer: entry.getData() });
             extractionLog.push(`📄 Found PDF: ${entry.entryName}`);
+          } else if (name.endsWith('.docx') || name.endsWith('.doc')) {
+            allDocBuffers.push({ name: entry.entryName, buffer: entry.getData() });
+            extractionLog.push(`📄 Found Word Doc: ${entry.entryName}`);
           } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
             const items = extractBoqFromExcel(entry.getData(), entry.entryName);
             boqItems = [...boqItems, ...items];
@@ -554,6 +573,25 @@ export class QueueController {
           extractionLog.push(`❌ Error extracting PDF "${name}": ${err.message}`);
         } finally {
           if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        }
+      }
+
+      // ── Extract text from Word Docs ──────────────────────────────────────────
+      for (const { name, buffer } of allDocBuffers) {
+        if (name.toLowerCase().endsWith('.docx')) {
+          try {
+            const result = await mammoth.extractRawText({ buffer });
+            const docText = result.value.trim();
+            if (docText) {
+              const capped = docText.substring(0, 10000);
+              combinedPdfText += `\n\n=== DOCX: ${name} ===\n${capped}`;
+              extractionLog.push(`✅ Extracted ${capped.length} chars from DOCX: ${name}`);
+            }
+          } catch (err: any) {
+            extractionLog.push(`❌ Error extracting DOCX "${name}": ${err.message}`);
+          }
+        } else {
+           extractionLog.push(`⚠️ Skipping .doc file (only .docx is supported): ${name}`);
         }
       }
 

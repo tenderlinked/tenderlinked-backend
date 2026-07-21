@@ -14,6 +14,7 @@ import { S3Service } from '../aws/s3.service';
 import { pipeline } from 'stream/promises';
 import { extractTextWithOcr } from '../common/utils/ocr.util';
 import { generateOpenAiInsights } from '../common/utils/openai-insights.util';
+import * as mammoth from 'mammoth';
 
 @Injectable()
 export class BoqProcessorService {
@@ -65,7 +66,18 @@ Bid Opening Date: ${tender.bidOpeningDate ? tender.bidOpeningDate.toISOString() 
       let combinedRawText = `${mainTableText}\n${tenderTitle} ${bodyText} `;
 
       // 1. Check local persistent directory first (saved by scraper)
-      const localTenderDir = path.join(process.cwd(), 'downloads', safeState, tId);
+      // NOTE: scraper saves to downloads/<stateSlug>/<tenderId>/ where stateSlug uses hyphens (e.g. 'west-bengal')
+      // stateTitle already has hyphens, safeState has spaces — must use stateTitle here to match!
+      let localTenderDir = path.join(process.cwd(), 'downloads', stateTitle, tId);
+      
+      // Fallback: scrapers often save using the source's tenderId instead of our generated tenderCode
+      if (!fs.existsSync(localTenderDir) && tender.tenderId) {
+        const altDir = path.join(process.cwd(), 'downloads', stateTitle, tender.tenderId);
+        if (fs.existsSync(altDir)) {
+          localTenderDir = altDir;
+        }
+      }
+
       const hasLocalFiles = fs.existsSync(localTenderDir) && fs.readdirSync(localTenderDir).length > 0;
       
       let localPdfPath: string | undefined;
@@ -125,17 +137,111 @@ Bid Opening Date: ${tender.bidOpeningDate ? tender.bidOpeningDate.toISOString() 
         }
       }
 
-      // Extract BOQ from local ZIP first (if it exists)
+      // Extract BOQ AND PDFs from local ZIP (recursively handles nested ZIPs — e.g. Andhra Pradesh)
       if (localZipPath && fs.existsSync(localZipPath)) {
         try {
-          boqData = await this.extractBoqFromZip(localZipPath, true);
-          if (boqData && boqData.length > 0) {
-            const boqText = JSON.stringify(boqData);
-            bodyText += ` ${boqText}`;
-            combinedRawText += ` ${boqText}`;
+          const zipBuffer = fs.readFileSync(localZipPath);
+          const { pdfEntries, docEntries, excelBuffers } = this.extractAllFromZipBuffer(zipBuffer);
+
+          // Sort PDFs by priority:
+          //   P1 (0): NIT / notice / tender document / index / general  → gets most chars
+          //   P2 (1): schedule / boq / work item / commercial         → secondary
+          //   P3 (2): everything else                                 → remainder only
+          const getPriority = (name: string): number => {
+            const n = name.toLowerCase();
+            if (/nit|notice|inviting|tender_doc|tendernotice|index|general|rfp|rfq/.test(n)) return 0;
+            if (/schedule|boq|work_item|workitem|bill.of|commercial/.test(n)) return 1;
+            return 2;
+          };
+          pdfEntries.sort((a, b) => getPriority(a.name) - getPriority(b.name));
+
+          let remainingBudget = 60000;
+
+          console.log(`[Queue] ZIP has ${pdfEntries.length} PDF(s): ${pdfEntries.map(e => `${e.name}(P${getPriority(e.name)})`).join(', ')}`);
+
+          for (const pdfEntry of pdfEntries) {
+            if (remainingBudget <= 0) {
+              console.log(`[Queue] Skipping ${pdfEntry.name} — global budget exhausted.`);
+              continue;
+            }
+
+            // To prevent a single massive PDF from starving others, cap a single file to 45,000 chars if there are multiple files
+            let fileBudget = pdfEntries.length > 1 ? Math.min(45000, remainingBudget) : remainingBudget;
+
+            try {
+              const PDFParser = require('pdf2json');
+              let rawTextFromPdf = await Promise.race([
+                new Promise<string>((resolve, reject) => {
+                  const pdfParser = new PDFParser(null, 1);
+                  pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
+                  pdfParser.on('pdfParser_dataReady', () => resolve(pdfParser.getRawTextContent()));
+                  pdfParser.parseBuffer(pdfEntry.buffer);
+                }),
+                new Promise<string>((_, reject) => setTimeout(() => reject(new Error('pdf2json timeout')), 10000)),
+              ]);
+
+              // OCR fallback for scanned PDFs
+              const textWithoutBreaks = rawTextFromPdf ? rawTextFromPdf.replace(/----------------Page \(\d+\) Break----------------/g, '').trim() : '';
+              if (!textWithoutBreaks || textWithoutBreaks.length < 50) {
+                console.log(`[Queue] ${pdfEntry.name} is scanned image PDF. Running OCR...`);
+                const tempPdfPath = path.join(process.cwd(), 'downloads', '_temp', `ocr_${tId}_${pdfEntry.name}.pdf`);
+                fs.mkdirSync(path.dirname(tempPdfPath), { recursive: true });
+                fs.writeFileSync(tempPdfPath, pdfEntry.buffer);
+                rawTextFromPdf = await extractTextWithOcr(tempPdfPath);
+                try { fs.unlinkSync(tempPdfPath); } catch {}
+              }
+
+              if (rawTextFromPdf) {
+                const capped = rawTextFromPdf.substring(0, fileBudget);
+                remainingBudget -= capped.length;
+                bodyText += ` ${capped}`;
+                combinedRawText += ` ${capped}`;
+                console.log(`[Queue] +${capped.length} chars from ${pdfEntry.name}. (Remaining global budget: ${remainingBudget})`);
+              }
+            } catch (pdfErr: any) {
+              console.warn(`[Queue] Failed to extract text from ${pdfEntry.name}: ${pdfErr.message}`);
+            }
+          }
+
+          // Extract text from Word documents (if any)
+          for (const docEntry of docEntries) {
+            try {
+              if (docEntry.name.toLowerCase().endsWith('.docx')) {
+                const result = await mammoth.extractRawText({ buffer: docEntry.buffer });
+                const docText = result.value.trim();
+                if (docText) {
+                  let docBudget = docEntries.length + pdfEntries.length > 1 ? Math.min(30000, remainingBudget) : remainingBudget;
+                  const capped = docText.substring(0, docBudget);
+                  remainingBudget -= capped.length;
+                  bodyText += ` ${capped}`;
+                  combinedRawText += ` ${capped}`;
+                  console.log(`[Queue] +${capped.length} chars from ${docEntry.name}. (Remaining global budget: ${remainingBudget})`);
+                }
+              } else {
+                console.warn(`[Queue] .doc parsing not fully supported (only .docx): ${docEntry.name}`);
+              }
+            } catch (docErr: any) {
+              console.warn(`[Queue] Failed to extract text from Word document ${docEntry.name}: ${docErr.message}`);
+            }
+          }
+
+          // Extract BOQ from Excel files inside ZIP
+          if (excelBuffers.length > 0 && (!boqData || (boqData as any[]).length === 0)) {
+            for (const excelBuf of excelBuffers) {
+              try {
+                const parsed = parseBoqExcel(excelBuf);
+                if (parsed && parsed.length > 0) {
+                  boqData = parsed;
+                  const boqText = JSON.stringify(boqData);
+                  bodyText += ` ${boqText}`;
+                  combinedRawText += ` ${boqText}`;
+                  break;
+                }
+              } catch {}
+            }
           }
         } catch (localExtractErr) {
-          console.warn(`[Queue] Failed to extract from local ZIP, will fallback to S3: ${localExtractErr}`);
+          console.warn(`[Queue] Failed to extract from local ZIP: ${localExtractErr}`);
         }
       }
 
@@ -143,7 +249,7 @@ Bid Opening Date: ${tender.bidOpeningDate ? tender.bidOpeningDate.toISOString() 
       if (hasLocalFiles) {
         for (const filePath of filesToUpload) {
           const filename = path.basename(filePath);
-          const s3Key = `tenderlinked/${safeState}/${tId}/${filename}`;
+          const s3Key = `tenderlinked/${stateTitle}/${tId}/${filename}`;
           
           try {
             await this.s3Service.uploadFile(filePath, s3Key, true); // true = delete local file after upload
@@ -354,43 +460,76 @@ Bid Opening Date: ${tender.bidOpeningDate ? tender.bidOpeningDate.toISOString() 
     return { success: true };
   }
 
+  /**
+   * Recursively extract all PDFs and Excel files from a ZIP buffer,
+   * handling arbitrarily nested ZIPs (e.g. Andhra Pradesh docs with zip-in-zip).
+   * Returns named entries so callers can prioritise by filename.
+   */
+  private extractAllFromZipBuffer(
+    zipBuffer: Buffer,
+    depth = 0,
+  ): { pdfEntries: { name: string; buffer: Buffer }[]; docEntries: { name: string; buffer: Buffer }[]; excelBuffers: Buffer[] } {
+    const MAX_DEPTH = 5;
+    const pdfEntries: { name: string; buffer: Buffer }[] = [];
+    const docEntries: { name: string; buffer: Buffer }[] = [];
+    const excelBuffers: Buffer[] = [];
+
+    if (depth > MAX_DEPTH) {
+      console.warn(`[BoqProcessor] Max ZIP nesting depth (${MAX_DEPTH}) reached — stopping recursion.`);
+      return { pdfEntries, docEntries, excelBuffers };
+    }
+
+    try {
+      const zip = new AdmZip(zipBuffer);
+      for (const entry of zip.getEntries()) {
+        if (entry.isDirectory) continue;
+        // Use just the base filename for readability (path.basename handles forward/back slashes)
+        const baseName = entry.entryName.replace(/\\/g, '/').split('/').pop() || entry.entryName;
+        const nameLower = baseName.toLowerCase();
+        try {
+          const data = entry.getData();
+          if (nameLower.endsWith('.pdf')) {
+            console.log(`[BoqProcessor] Found PDF (depth=${depth}): ${baseName}`);
+            pdfEntries.push({ name: baseName, buffer: data });
+          } else if (nameLower.endsWith('.doc') || nameLower.endsWith('.docx')) {
+            console.log(`[BoqProcessor] Found Word Doc (depth=${depth}): ${baseName}`);
+            docEntries.push({ name: baseName, buffer: data });
+          } else if (nameLower.endsWith('.zip') || nameLower.endsWith('.rar')) {
+            console.log(`[BoqProcessor] Found nested ZIP (depth=${depth}): ${baseName} — recursing...`);
+            const nested = this.extractAllFromZipBuffer(data, depth + 1);
+            pdfEntries.push(...nested.pdfEntries);
+            docEntries.push(...nested.docEntries);
+            excelBuffers.push(...nested.excelBuffers);
+          } else if (nameLower.endsWith('.xls') || nameLower.endsWith('.xlsx') || nameLower.endsWith('.xlsm')) {
+            console.log(`[BoqProcessor] Found Excel (depth=${depth}): ${baseName}`);
+            excelBuffers.push(data);
+          }
+        } catch (entryErr: any) {
+          console.warn(`[BoqProcessor] Failed to read ZIP entry ${baseName}: ${entryErr.message}`);
+        }
+      }
+    } catch (zipErr: any) {
+      console.warn(`[BoqProcessor] Failed to open ZIP at depth ${depth}: ${zipErr.message}`);
+    }
+
+    return { pdfEntries, docEntries, excelBuffers };
+  }
+
   async extractBoqFromZip(source: string, isLocal = false): Promise<any[]> {
     try {
       let zipBuffer: Buffer;
-      
       if (isLocal) {
-        console.log(`[BoqProcessor] Loading local ZIP from ${source}...`);
         zipBuffer = fs.readFileSync(source);
       } else {
-        console.log(`[BoqProcessor] Downloading ZIP from ${source}...`);
-        const response = await axios.get(source, {
-          responseType: 'arraybuffer',
-          timeout: 30000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0',
-          },
-        });
+        const response = await axios.get(source, { responseType: 'arraybuffer', timeout: 30000, headers: { 'User-Agent': 'Mozilla/5.0' } });
         zipBuffer = response.data;
       }
-
-      const zip = new AdmZip(zipBuffer);
-      const zipEntries = zip.getEntries();
-      let boqExcelBuffer: Buffer | null = null;
-
-      for (const entry of zipEntries) {
-        const fileName = entry.entryName.toLowerCase();
-        if (fileName.endsWith('.xls') || fileName.endsWith('.xlsm') || fileName.endsWith('.xlsx')) {
-          boqExcelBuffer = entry.getData();
-          break;
-        }
+      const { excelBuffers } = this.extractAllFromZipBuffer(zipBuffer);
+      for (const buf of excelBuffers) {
+        const parsed = parseBoqExcel(buf);
+        if (parsed && parsed.length > 0) return parsed;
       }
-
-      if (!boqExcelBuffer) {
-         console.log('[BoqProcessor] No Excel file found in ZIP');
-         return [];
-      }
-
-      return parseBoqExcel(boqExcelBuffer);
+      return [];
     } catch (error: any) {
       console.error(`[BoqProcessor] Error extracting BOQ from ZIP: ${error.message}`);
       return [];

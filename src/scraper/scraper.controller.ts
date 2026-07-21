@@ -36,7 +36,7 @@ export class ScraperController {
   } } })
   async scrape(
     @Req() req: Request,
-    @Body() body: { targetIds?: string[]; aiMode?: string } = {}
+    @Body() body: { targetIds?: string[]; aiMode?: string; repairDocuments?: boolean } = {}
   ) {
     const authHeader = req.headers["authorization"];
     const cronSecret = process.env.CRON_SECRET;
@@ -60,7 +60,7 @@ export class ScraperController {
     }
 
     if (body?.targetIds && body.targetIds.length > 0) {
-      const result = await this.scraperService.scrapeSpecificTargets(body.targetIds, source);
+      const result = await this.scraperService.scrapeSpecificTargets(body.targetIds, source, body.repairDocuments);
       return {
         success: true,
         message: `Scraper started in background (AI mode: ${currentAiMode})`,
@@ -68,7 +68,7 @@ export class ScraperController {
         districtsProcessed: result.districtsProcessed,
       };
     } else {
-      const result = await this.scraperService.runFullScrape(source);
+      const result = await this.scraperService.runFullScrape(source, body.repairDocuments);
       return {
         success: true,
         message: `Scraper started in background (AI mode: ${currentAiMode})`,

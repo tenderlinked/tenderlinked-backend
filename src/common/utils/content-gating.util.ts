@@ -1,8 +1,15 @@
 export const REDACTED_PLACEHOLDER = '__PREMIUM_LOCKED__';
 export const CREDIT_REDACTED_PLACEHOLDER = '__CREDIT_LOCKED__';
 
-export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], isUnlockedWithCredit: boolean = false) {
+export function redactTenderBasedOnPlan(tender: any, allowedFields: string[], isUnlockedWithCredit: boolean = false, isSuperAdmin: boolean = false) {
   if (!tender) return tender;
+
+  if (isSuperAdmin) {
+    return {
+      ...tender,
+      hasDocuments: !!(tender.documentsDownloaded || tender.noticePdfUrl || tender.tenderPdfUrl)
+    };
+  }
 
   const redactedTender = { ...tender };
   

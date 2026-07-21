@@ -159,6 +159,27 @@ export class TendersController {
     return this.tendersService.getFiltersAggregate();
   }
 
+  @Get('stats/home')
+  @ApiOperation({ summary: "Get high-level stats for the home page" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getHomeStats() {
+    return this.tendersService.getHomeStats();
+  }
+
+  @Get('metadata/mega-menu')
+  @ApiOperation({ summary: "Get real data for the navigation mega menu" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getMegaMenu() {
+    return this.tendersService.getMegaMenu();
+  }
+
+  @Get('metadata/dropdowns')
+  @ApiOperation({ summary: "Get distinct dropdown options for tender metadata" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  async getMetadataDropdowns() {
+    return this.tendersService.getMetadataDropdowns();
+  }
+
   @Get('authorities')
   @UseGuards(TenantRoleGuard)
   @RequirePermissions('tenders:read')
@@ -234,6 +255,47 @@ export class TendersController {
       return { success: true, data: tender };
     } catch (error: any) {
       console.error(`[GET /tenders/${id}] Error:`, error);
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException({
+        error: "Internal Server Error",
+        details: error?.message || String(error),
+      });
+    }
+  }
+
+  @Patch(':id')
+  @UseGuards(TenantRoleGuard)
+  @ApiOperation({ summary: "Update a specific tender by ID (Super Admin only)" })
+  @ApiResponse({ status: 200, description: 'Successful response' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async updateTender(
+    @Param('id') id: string,
+    @Body() dto: UpdateTenderDto,
+    @Req() req?: any
+  ) {
+    try {
+      let userId: string | null = null;
+      const authHeader = req?.headers?.['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.split(' ')[1];
+          const payloadBase64 = token.split('.')[1];
+          const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+          userId = decodedPayload.sub;
+        } catch (e) {}
+      }
+
+      if (!userId) {
+        throw new UnauthorizedException("User not authenticated");
+      }
+
+      const tender = await this.tendersService.updateTender(id, dto, userId);
+      return { success: true, data: tender };
+    } catch (error: any) {
+      console.error(`[PATCH /tenders/${id}] Error:`, error);
       if (error instanceof HttpException) throw error;
       throw new InternalServerErrorException({
         error: "Internal Server Error",
@@ -544,25 +606,4 @@ export class TendersController {
   }
 
   // -------------------------------------------------
-  //  UPDATE – only users with `tenders:write`
-  // -------------------------------------------------
-  @Patch(':id')
-  @UseGuards(TenantRoleGuard)
-  @RequirePermissions('tenders:write')
-  @ApiOperation({ summary: 'Update an existing Tender (Super‑Admin or tenant member granted permission)' })
-  @ApiResponse({ status: 200, description: 'Successful response' })
-  @ApiResponse({ status: 400, description: 'Bad Request' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 500, description: 'Internal Server Error' })@ApiBody({ type: UpdateTenderDto })
-  async update(@Param('id') id: string, @Body() dto: UpdateTenderDto) {
-    if (Object.keys(dto).length === 0) {
-      throw new BadRequestException('No fields provided for update');
-    }
-    try {
-      return await this.tendersService.updateTender(id, dto);
-    } catch (e) {
-      console.error('[PATCH /tenders/:id] Error:', e);
-      throw new InternalServerErrorException('Failed to update tender');
-    }
-  }
 }

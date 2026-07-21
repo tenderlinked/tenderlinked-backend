@@ -395,7 +395,9 @@ export async function scrapeApStateTenders(
                         try {
                             const path = require('path');
                             const fs = require('fs');
-                            const downloadDir = path.join(process.cwd(), 'downloads', target.name, row.tenderId);
+                            const targetSlug = target.name.replace(/\s+/g, '-').toLowerCase();
+                            // Use the generated tenderCode for the folder so it matches the DB uniquely
+                            const downloadDir = path.join(process.cwd(), 'downloads', targetSlug, finalTenderCode);
                             if (!fs.existsSync(downloadDir)) {
                                 fs.mkdirSync(downloadDir, { recursive: true });
                             }

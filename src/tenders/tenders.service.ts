@@ -59,8 +59,12 @@ export class TendersService {
     let tenantId: string | null = null;
     let unlockedTenderIds: Set<string> = new Set();
     let allBookmarkedIds: Set<string> = new Set();
+    let isSuperAdmin = false;
 
     if (userId) {
+      const profile = await this.prisma.userProfile.findUnique({ where: { userId } });
+      if (profile?.globalRole === 'SUPER_ADMIN') isSuperAdmin = true;
+
       const member = await this.prisma.tenantMember.findFirst({
         where: { userId },
         include: { tenant: { include: { subscription: true } } }
@@ -143,6 +147,8 @@ export class TendersService {
       else AND.push({ id: "NONE" });
     }
 
+    const semanticScoreMap: Map<string, number> = new Map();
+
     if (search) {
       let semanticMatchIds: string[] = [];
       try {
@@ -151,7 +157,7 @@ export class TendersService {
           const vectorStr = `[${searchVector.join(',')}]`;
           // Fetch top 300 semantically similar tenders (Cosine distance <= 0.4 meaning >= 60% similarity)
           const matches: any[] = await this.prisma.$queryRawUnsafe(`
-            SELECT "tenderId" as id 
+            SELECT "tenderId" as id, (1 - (embedding <=> '${vectorStr}'::vector)) as score
             FROM "TenderAiData" 
             WHERE embedding IS NOT NULL 
             AND embedding <=> '${vectorStr}'::vector < 0.4
@@ -159,6 +165,7 @@ export class TendersService {
             LIMIT 300
           `);
           semanticMatchIds = matches.map(m => m.id);
+          matches.forEach(m => semanticScoreMap.set(m.id, Math.round(Number(m.score) * 100)));
         }
       } catch (e) {
         console.warn('[SemanticSearch] Vector query failed, falling back to lexical:', e);
@@ -320,11 +327,12 @@ export class TendersService {
         isHighPriority: hasHighPriorityTag || titleMatch || summaryMatch,
         isBookmarked: allBookmarkedIds.has(t.id),
         isApplied: false,
+        aiMatchScore: semanticScoreMap.get(t.id) ?? null,
       };
 
       // Apply content gating
       const isUnlockedWithCredit = unlockedTenderIds.has(t.id);
-      return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
+      return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit, isSuperAdmin);
     });
 
     return {
@@ -352,8 +360,12 @@ export class TendersService {
     let allowedFields: string[] = [];
     let isUnlockedWithCredit = false;
     let memberTenantId: string | null = null;
+    let isSuperAdmin = false;
 
     if (userId) {
+      const profile = await this.prisma.userProfile.findUnique({ where: { userId } });
+      if (profile?.globalRole === 'SUPER_ADMIN') isSuperAdmin = true;
+
       const member = await this.prisma.tenantMember.findFirst({
         where: { userId },
         include: { tenant: { include: { subscription: true } } }
@@ -392,7 +404,7 @@ export class TendersService {
 
         if (!alreadyViewed) {
           // Check view limit
-          if (sub.tendersViewedThisMonth >= maxTenderViews) {
+          if (!isSuperAdmin && sub.tendersViewedThisMonth >= maxTenderViews) {
             throw new ForbiddenException({
               error: "Limit Exceeded",
               message: "You have reached your maximum tender view limit for this month.",
@@ -444,7 +456,49 @@ export class TendersService {
       }
     }
 
-    return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit);
+    return redactTenderBasedOnPlan(enhancedTender, allowedFields, isUnlockedWithCredit, isSuperAdmin);
+  }
+
+  async updateTender(id: string, dto: UpdateTenderDto, userId: string) {
+    const profile = await this.prisma.userProfile.findUnique({ where: { userId } });
+    if (profile?.globalRole !== 'SUPER_ADMIN') {
+      throw new ForbiddenException("Only Super Admins can edit tender data");
+    }
+
+    const { aiSummary, tags, pdfUrl, sourceUrl, ...tenderData } = dto;
+
+    const existingTender = await this.prisma.tender.findUnique({ where: { id } });
+    if (!existingTender) {
+      throw new NotFoundException("Tender not found");
+    }
+
+    return await this.prisma.$transaction(async (tx) => {
+      // Update basic fields if provided
+      const updatedTender = await tx.tender.update({
+        where: { id },
+        data: tenderData,
+      });
+
+      // Update AI data if provided
+      if (aiSummary !== undefined || tags !== undefined || pdfUrl !== undefined || sourceUrl !== undefined) {
+        const aiDataUpdate: any = {};
+        if (aiSummary !== undefined) aiDataUpdate.aiSummary = aiSummary;
+        if (tags !== undefined) aiDataUpdate.tags = tags;
+        if (pdfUrl !== undefined) aiDataUpdate.pdfUrl = pdfUrl;
+        if (sourceUrl !== undefined) aiDataUpdate.sourceUrl = sourceUrl;
+
+        await tx.tenderAiData.upsert({
+          where: { tenderId: id },
+          create: {
+            tenderId: id,
+            ...aiDataUpdate,
+          },
+          update: aiDataUpdate,
+        });
+      }
+
+      return updatedTender;
+    });
   }
 
   async getTenderAiStatus(id: string) {
@@ -466,7 +520,12 @@ export class TendersService {
     let isUnlockedWithCredit = false;
     let allowedFields: string[] = [];
 
+    let isSuperAdmin = false;
+
     if (userId) {
+      const profile = await this.prisma.userProfile.findUnique({ where: { userId } });
+      if (profile?.globalRole === 'SUPER_ADMIN') isSuperAdmin = true;
+
       const member = await this.prisma.tenantMember.findFirst({
         where: { userId },
         include: { tenant: { include: { subscription: true } } }
@@ -487,8 +546,8 @@ export class TendersService {
       }
     }
 
-    if (!allowedFields.includes('noticePdfUrl') && !isUnlockedWithCredit) {
-      // User is not allowed to download/view the documents without a credit
+    // If document is gated for this plan and NOT unlocked with credits, deny access
+    if (!isSuperAdmin && !allowedFields.includes('noticePdfUrl') && !isUnlockedWithCredit) {
       return [];
     }
 
@@ -773,12 +832,7 @@ export class TendersService {
     return this.prisma.tender.create({ data });
   }
 
-  async updateTender(id: string, dto: UpdateTenderDto) {
-    return this.prisma.tender.update({
-      where: { id },
-      data: dto,
-    });
-  }
+
 
   async getSidebarStats() {
     const KEYWORDS = [
@@ -1068,5 +1122,66 @@ export class TendersService {
     // Map back to the sorted order of views
     const tenderMap = new Map(tenders.map(t => [t.id, t]));
     return views.map(v => tenderMap.get(v.tenderId)).filter(Boolean);
+  }
+
+  async getMetadataDropdowns() {
+    const [tenderCategories, tenderTypes, productCategories, contractTypes, formOfContracts] = await Promise.all([
+      this.prisma.tender.findMany({ select: { tenderCategory: true }, distinct: ['tenderCategory'], where: { tenderCategory: { not: "" } } }),
+      this.prisma.tender.findMany({ select: { tenderType: true }, distinct: ['tenderType'], where: { tenderType: { not: "" } } }),
+      this.prisma.tender.findMany({ select: { productCategory: true }, distinct: ['productCategory'], where: { productCategory: { not: "" } } }),
+      this.prisma.tender.findMany({ select: { contractType: true }, distinct: ['contractType'], where: { contractType: { not: "" } } }),
+      this.prisma.tender.findMany({ select: { formOfContract: true }, distinct: ['formOfContract'], where: { formOfContract: { not: "" } } })
+    ]);
+
+    return {
+      tenderCategories: tenderCategories.map(t => t.tenderCategory).filter(Boolean).sort(),
+      tenderTypes: tenderTypes.map(t => t.tenderType).filter(Boolean).sort(),
+      productCategories: productCategories.map(t => t.productCategory).filter(Boolean).sort(),
+      contractTypes: contractTypes.map(t => t.contractType).filter(Boolean).sort(),
+      formOfContracts: formOfContracts.map(t => t.formOfContract).filter(Boolean).sort(),
+    };
+  }
+
+  async getHomeStats() {
+    const [totalTenders, sourcesObj, statesObj, valueObj] = await Promise.all([
+      this.prisma.tender.count(),
+      this.prisma.tender.findMany({ distinct: ['organisation'], select: { organisation: true }, where: { organisation: { not: "" } } }),
+      this.prisma.tender.findMany({ distinct: ['state'], select: { state: true }, where: { state: { not: "" } } }),
+      this.prisma.tender.aggregate({ _sum: { tenderAmount: true } })
+    ]);
+
+    return {
+      totalSources: sourcesObj.length,
+      totalTenders: totalTenders,
+      statesCovered: statesObj.length,
+      annualValue: valueObj._sum.tenderAmount || 0
+    };
+  }
+
+  async getMegaMenu() {
+    const [states, cities, authorities, categories, keywords] = await Promise.all([
+      this.prisma.scraperTarget.findMany({ distinct: ['state'], select: { state: true }, where: { isActive: true, state: { not: null } }, take: 36 }),
+      this.prisma.tender.findMany({ distinct: ['city'], select: { city: true }, where: { city: { not: "" } }, take: 25 }),
+      this.prisma.tender.findMany({ distinct: ['organisation'], select: { organisation: true }, where: { organisation: { not: "" } }, take: 25 }),
+      this.prisma.tender.findMany({ distinct: ['tenderCategory'], select: { tenderCategory: true }, where: { tenderCategory: { not: "" } }, take: 25 }),
+      this.prisma.tender.findMany({ distinct: ['title'], select: { title: true }, take: 25 })
+    ]);
+
+    // Simple keyword extraction from titles for mega menu keywords
+    const keywordSet = new Set<string>();
+    keywords.forEach(k => {
+        if(k.title) {
+            const words = k.title.split(' ').filter(w => w.length > 5);
+            if(words.length > 0) keywordSet.add(words[0]);
+        }
+    });
+
+    return {
+      "By States": states.map(s => s.state + " Tenders"),
+      "By Cities": cities.map(c => c.city + " Tenders"),
+      "By Authorities": authorities.map(a => a.organisation + " Tenders"),
+      "By Categories": categories.map(c => c.tenderCategory + " Tenders"),
+      "By Keywords": Array.from(keywordSet).slice(0, 15).map(k => k + " Tenders")
+    };
   }
 }

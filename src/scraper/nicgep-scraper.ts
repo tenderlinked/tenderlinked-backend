@@ -86,7 +86,9 @@ export async function scrapeStateTenders(
   target: { id?: string; name: string; url: string; regionStateId?: string | null; regionDistrictId?: string | null; type?: string },
   source: string = "AUTO",
   getStatus: () => ScrapeStatus = () => "RUNNING",
-  onProgress?: (found: number, added: number, totalTenders?: number) => void
+  onProgress?: (found: number, added: number, totalTenders?: number) => void,
+  repairDocuments: boolean = false,
+  onLogCreated?: (scrapeLogId: string) => void
 ): Promise<ScrapeResult> {
   const targetRegion = target.name;
   const stateSlug = targetRegion
@@ -109,6 +111,9 @@ export async function scrapeStateTenders(
       source,
     },
   });
+
+  // Immediately notify the service so it can link this DB log ID to the in-memory instance
+  if (onLogCreated) onLogCreated(scrapeLog.id);
 
   const allValidTenders: any[] = [];
 
@@ -291,6 +296,12 @@ export async function scrapeStateTenders(
       });
 
       if (existing) {
+        if (!repairDocuments) {
+          if (onProgress) onProgress(1, 0);
+          continue;
+        }
+        
+        // Deep Scrape: attempt to repair missing documents
         if (existing.aiData?.documentsDownloaded) {
           if (onProgress) onProgress(1, 0);
           continue;
@@ -871,9 +882,9 @@ export async function scrapeStateTenders(
     return {
       district: targetRegion,
       success: !wasStopped,
-
       tenders: allValidTenders,
       newTendersCount,
+      scrapeLogId: scrapeLog.id,
     };
   } catch (error) {
     console.error(`[Scraper Error] Failed to scrape NICGEP State Tenders:`, error);
@@ -894,6 +905,7 @@ export async function scrapeStateTenders(
       error: error instanceof Error ? error.message : "Unknown error",
       tenders: [],
       newTendersCount,
+      scrapeLogId: scrapeLog.id,
     };
   }
 }

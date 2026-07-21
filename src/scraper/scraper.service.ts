@@ -78,20 +78,30 @@ export class ScraperService implements OnModuleInit {
 
   async getInstances(): Promise<ScrapeInstance[]> {
     const active = Array.from(this.activeInstances.values());
-    const activeNames = new Set(active.map(a => a.targetName));
+    // Collect DB log IDs that belong to currently active in-memory runs
+    const activeLogIds = new Set(active.map(a => a.scrapeLogId).filter(Boolean));
     
     const history = await this.prisma.scrapeLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+
+    // Build a map of targetId -> type so history rows show STATE/DISTRICT instead of "HISTORY"
+    const targetIds = [...new Set(history.map(l => l.targetId).filter(Boolean))] as string[];
+    const targets = targetIds.length > 0
+      ? await this.prisma.scraperTarget.findMany({ where: { id: { in: targetIds } }, select: { id: true, type: true } })
+      : [];
+    const targetTypeMap = new Map(targets.map(t => [t.id, t.type]));
     
     const historicalInstances: ScrapeInstance[] = history
-      .filter(log => !['RUNNING', 'PENDING', 'PAUSED'].includes(log.status))
+      // Exclude logs that are RUNNING/PENDING/PAUSED (already shown via active instances)
+      // AND exclude the specific DB log that belongs to a currently active in-memory instance
+      .filter(log => !['RUNNING', 'PENDING', 'PAUSED'].includes(log.status) && !activeLogIds.has(log.id))
       .map(log => ({
         id: log.id,
         targetId: log.targetId || '',
         targetName: log.targetRegion,
-        targetType: 'HISTORY',
+        targetType: (log.targetId && targetTypeMap.get(log.targetId)) || 'HISTORY',
         sourceUrl: '',
         status: log.status as ScrapeStatus,
         source: log.source,
@@ -369,7 +379,7 @@ export class ScraperService implements OnModuleInit {
     return instance;
   }
 
-  async runFullScrape(source: string = "AUTO") {
+  async runFullScrape(source: string = "AUTO", repairDocuments: boolean = false) {
     const results: ScrapeResult[] = [];
 
     // Fetch active targets from database
@@ -426,12 +436,14 @@ export class ScraperService implements OnModuleInit {
         if (scraperType === "AP_EPROCUREMENT") {
             result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         } else if (scraperType === "NICGEP") {
-            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+            const onLogCreated = (logId: string) => { instance.scrapeLogId = logId; };
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress, repairDocuments, onLogCreated);
         } else if (target.url.includes("apeprocurement.gov.in")) {
             // Fallback to URL-based auto-routing
             result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         } else {
-            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+            const onLogCreated = (logId: string) => { instance.scrapeLogId = logId; };
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress, repairDocuments, onLogCreated);
         }
         
         const current = this.activeInstances.get(instance.id);
@@ -496,7 +508,7 @@ export class ScraperService implements OnModuleInit {
     }
   }
 
-  async scrapeSpecificTargets(targetIds: string[], source: string = "MANUAL") {
+  async scrapeSpecificTargets(targetIds: string[], source: string = "MANUAL", repairDocuments: boolean = false) {
     const results: ScrapeResult[] = [];
 
     const targets = await this.prisma.scraperTarget.findMany({
@@ -550,12 +562,14 @@ export class ScraperService implements OnModuleInit {
         if (scraperType === "AP_EPROCUREMENT") {
             result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         } else if (scraperType === "NICGEP") {
-            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+            const onLogCreated = (logId: string) => { instance.scrapeLogId = logId; };
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress, repairDocuments, onLogCreated);
         } else if (target.url.includes("apeprocurement.gov.in")) {
             // Fallback to URL-based auto-routing
             result = await scrapeApStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
         } else {
-            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress);
+            const onLogCreated = (logId: string) => { instance.scrapeLogId = logId; };
+            result = await scrapeStateTenders(this.prisma, this.sessionService, target, source, getStatus, onProgress, repairDocuments, onLogCreated);
         }
         
         const current = this.activeInstances.get(instance.id);

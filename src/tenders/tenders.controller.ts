@@ -382,10 +382,12 @@ export class TendersController {
         return res.status(401).json({ error: "Unauthorized. Token required for download." });
       }
       let userId: string | null = null;
+      let globalRole: string | null = null;
       try {
         const payloadBase64 = token.split('.')[1];
         const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
         userId = decodedPayload.sub;
+        globalRole = decodedPayload.globalRole;
       } catch (e) {
         return res.status(401).json({ error: "Invalid token." });
       }
@@ -394,11 +396,13 @@ export class TendersController {
         return res.status(401).json({ error: "Unauthorized." });
       }
 
-      try {
-        // This will deduct 1 credit if not already unlocked
-        await this.creditsService.unlockTender(userId, id);
-      } catch (e: any) {
-        return res.status(403).json({ error: e.message || "Insufficient credits" });
+      if (globalRole !== 'SUPER_ADMIN') {
+        try {
+          // This will deduct 1 credit if not already unlocked
+          await this.creditsService.unlockTender(userId, id);
+        } catch (e: any) {
+          return res.status(403).json({ error: e.message || "Insufficient credits" });
+        }
       }
 
       await this.tendersService.downloadAllDocuments(id, res);

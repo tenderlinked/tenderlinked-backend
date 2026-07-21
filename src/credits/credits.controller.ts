@@ -31,7 +31,12 @@ export class CreditsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 500, description: 'Internal Server Error' })async getDownloadStatus(@Param('id') tenderId: string, @Req() req: any) {
     const userId = this.extractUserId(req);
+    const globalRole = this.extractGlobalRole(req);
     if (!userId) return { success: false, message: 'Unauthorized' };
+    
+    if (globalRole === 'SUPER_ADMIN') {
+      return { isUnlocked: true, downloadCount: 0, freeRedownloads: 999 };
+    }
     
     return this.creditsService.getDownloadStatus(userId, tenderId);
   }
@@ -99,6 +104,21 @@ export class CreditsController {
         const payloadBase64 = token.split('.')[1];
         const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
         return decodedPayload.sub;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  private extractGlobalRole(req: any): string | null {
+    const authHeader = req?.headers?.['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split(' ')[1];
+        const payloadBase64 = token.split('.')[1];
+        const decodedPayload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+        return decodedPayload.globalRole || null;
       } catch (e) {
         return null;
       }

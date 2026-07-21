@@ -1159,29 +1159,29 @@ export class TendersService {
   }
 
   async getMegaMenu() {
-    const [states, cities, authorities, categories, keywords] = await Promise.all([
+    const [states, cities, authorities, categories, priorityKeywords] = await Promise.all([
       this.prisma.scraperTarget.findMany({ distinct: ['state'], select: { state: true }, where: { isActive: true, state: { not: null } }, take: 36 }),
       this.prisma.tender.findMany({ distinct: ['city'], select: { city: true }, where: { city: { not: "" } }, take: 25 }),
       this.prisma.tender.findMany({ distinct: ['organisation'], select: { organisation: true }, where: { organisation: { not: "" } }, take: 25 }),
       this.prisma.tender.findMany({ distinct: ['tenderCategory'], select: { tenderCategory: true }, where: { tenderCategory: { not: "" } }, take: 25 }),
-      this.prisma.tender.findMany({ distinct: ['title'], select: { title: true }, take: 25 })
+      this.prisma.priorityKeyword.findMany({ select: { word: true }, take: 15, orderBy: { createdAt: 'desc' } })
     ]);
 
-    // Simple keyword extraction from titles for mega menu keywords
-    const keywordSet = new Set<string>();
-    keywords.forEach(k => {
-        if(k.title) {
-            const words = k.title.split(' ').filter(w => w.length > 5);
-            if(words.length > 0) keywordSet.add(words[0]);
-        }
-    });
+    const defaultKeywords = ["Solar", "CCTV", "Laptop", "Drone", "Ambulance", "Security Services"];
+    const finalKeywords = priorityKeywords.length > 0 
+      ? priorityKeywords.map(k => k.word) 
+      : defaultKeywords;
 
     return {
       "By States": states.map(s => s.state + " Tenders"),
       "By Cities": cities.map(c => c.city + " Tenders"),
       "By Authorities": authorities.map(a => a.organisation + " Tenders"),
       "By Categories": categories.map(c => c.tenderCategory + " Tenders"),
-      "By Keywords": Array.from(keywordSet).slice(0, 15).map(k => k + " Tenders")
+      "By Keywords": finalKeywords.map(k => {
+          // Capitalize first letter
+          const capitalized = k.charAt(0).toUpperCase() + k.slice(1);
+          return capitalized + " Tenders";
+      })
     };
   }
 }

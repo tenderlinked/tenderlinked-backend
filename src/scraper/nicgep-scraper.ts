@@ -656,8 +656,9 @@ export async function scrapeStateTenders(
         allValidTenders.push(validData);
         try {
           // (AI categorization removed per user request to keep original category)
+          const finalTenderId = validData.tenderId || nicgepTenderId;
           const savedTender = await prisma.tender.upsert({
-            where: { tenderId: nicgepTenderId },  // deduplicate by NICGEP's own ID
+            where: { tenderId: finalTenderId },  // deduplicate by final actual ID
             update: {
               // Update sourceUrl to latest real URL in case session changed
               sourceUrl: detailUrl,

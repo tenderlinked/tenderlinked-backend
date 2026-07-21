@@ -66,8 +66,9 @@ DATES & TIMELINE (Extract ALL date events with exact date AND time):
 - Validity Period of Bid
 - Work Completion Period / Contract Duration
 
-SCOPE OF WORK:
-- Extract EVERY work item, supply, or service mentioned. Be exhaustive.
+SCOPE OF WORK & WORK DESCRIPTION:
+- workDescription MUST be a highly detailed, comprehensive summary (at least 3-4 sentences) capturing the full essence of the project, especially if document text (PDFs/ZIPs) is provided. Do NOT just repeat the title.
+- scopeOfWork: Extract EVERY work item, supply, or service mentioned. Be exhaustive.
 - For BOQ documents, summarize the major categories of work items with quantities.
 - Include locations, districts, and block names if provided.
 - Mention the funding scheme (e.g., PMGSY, JJBY, Smart City Mission, AMRUT, MATY etc.).

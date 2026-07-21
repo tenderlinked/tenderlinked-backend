@@ -1167,10 +1167,14 @@ export class TendersService {
       this.prisma.priorityKeyword.findMany({ select: { word: true }, take: 15, orderBy: { createdAt: 'desc' } })
     ]);
 
-    const defaultKeywords = ["Solar", "CCTV", "Laptop", "Drone", "Ambulance", "Security Services"];
-    const finalKeywords = priorityKeywords.length > 0 
-      ? priorityKeywords.map(k => k.word) 
-      : defaultKeywords;
+    const defaultKeywords = [
+        "Road", "Construction", "Building", "Civil", 
+        "Hospital", "Bridge", "Electrical", "School"
+    ];
+    const finalKeywords = Array.from(new Set([
+        ...defaultKeywords,
+        ...priorityKeywords.map(k => k.word)
+    ])).slice(0, 15);
 
     return {
       "By States": states.map(s => s.state + " Tenders"),

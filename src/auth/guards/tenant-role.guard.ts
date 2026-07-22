@@ -116,7 +116,9 @@ export class TenantRoleGuard implements CanActivate {
       return true;
     }
 
-    const userPermissions = member.customRole?.permissions || [];
+    // If user has a custom role, use its permissions.
+    // If not, fallback to legacy ENUM checks: OWNER gets all ('*'), MEMBER gets basic read access.
+    const userPermissions = member.customRole?.permissions || (member.role === 'OWNER' ? ['*'] : ['tenders:read', 'bookmarks:manage', 'keywords:read', 'alerts:manage']);
     
     // Check if user has ALL required permissions, or the wildcard '*'
     if (userPermissions.includes('*')) return true;

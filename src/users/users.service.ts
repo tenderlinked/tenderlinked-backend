@@ -125,7 +125,7 @@ export class UsersService {
       ...profile,
       tenant: member?.tenant,
       role: member?.customRole?.name || member?.role,
-      permissions: member?.customRole?.permissions || (member?.role === 'OWNER' ? ['*'] : [])
+      permissions: member?.customRole?.permissions || (member?.role === 'OWNER' ? ['*'] : ['tenders:read', 'bookmarks:manage', 'keywords:read', 'alerts:manage'])
     };
   }
 
